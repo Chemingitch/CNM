@@ -52,11 +52,23 @@ try {
     if (Test-Path (Join-Path $root 'LICENSE')) { Copy-Item (Join-Path $root 'LICENSE') $stageRoot -Force }
 
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Push-Location $stage
-    & tar -a -c -f $zip CNM
-    $tar = $LASTEXITCODE
-    Pop-Location
-    if ($tar -ne 0) { throw "打 zip 失败（tar exit $tar）" }
+    # 打 zip 一律用 .NET，不要用 tar：
+    #   tar 按「本机区域设置」写条目名 —— 在 CI（en-US）上曾把「启动 CNM.cmd」写成「?? CNM.cmd」，
+    #   而 ? 在 Windows 是非法字符 → 资源管理器 / Expand-Archive 直接解压失败。
+    #   注意：必须用不传编码的那个重载。传 Encoding.UTF8 反而不会置 UTF-8 标志位，
+    #   在中文系统上会被解压工具按 GBK 读成「鍚姩 CNM.cmd」。不传编码 = UTF-8 字节 + 置标志位，且与区域设置无关。
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $stageRoot,
+        $zip,
+        [IO.Compression.CompressionLevel]::Optimal,
+        $true)
+    if (-not (Test-Path $zip)) { throw "打 zip 失败：$zip 没生成" }
+
+    # 自检：包里的中文文件名必须原样保留（这个坑踩过一次，别再踩第二次）
+    $check = [IO.Compression.ZipFile]::OpenRead($zip)
+    try { $found = @($check.Entries | Where-Object { $_.FullName -like '*启动 CNM.cmd' }).Count } finally { $check.Dispose() }
+    if ($found -lt 1) { throw "打包自检失败：$zip 里没有「启动 CNM.cmd」条目（文件名被编码转坏了）" }
 }
 finally {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
