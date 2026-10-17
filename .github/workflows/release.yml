@@ -1,0 +1,93 @@
+name: 发布
+
+# 推一个 v* 的标签就自动出包；也可以在 Actions 页面手动跑一次（只上传构建产物，不发 Release）
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # 让程序版本号和 tag 对齐（v0.2.0 → 0.2.0）
+      - name: 版本号对齐 tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          $csproj = 'CNM.csproj'
+          $t = [IO.File]::ReadAllText($csproj, [Text.Encoding]::UTF8)
+          $t = [Text.RegularExpressions.Regex]::Replace($t, '<Version>[^<]*</Version>', "<Version>$v</Version>")
+          [IO.File]::WriteAllText($csproj, $t, (New-Object System.Text.UTF8Encoding($false)))
+          $iss = 'installer\CNM.iss'
+          $i = [IO.File]::ReadAllText($iss, [Text.Encoding]::UTF8)
+          $i = [Text.RegularExpressions.Regex]::Replace($i, '#define\s+AppVer\s+"[^"]*"', "#define AppVer `"$v`"")
+          [IO.File]::WriteAllText($iss, $i, (New-Object System.Text.UTF8Encoding($true)))
+          Write-Host "版本号 → $v"
+
+      # 自包含发布（自带 .NET 运行时，换机器直接跑）
+      - name: 构建
+        shell: pwsh
+        run: ./build.ps1
+
+      # 引擎不进仓库（80+ MB 二进制），CI 里现装：官方最新 Vulkan 版，走加速前缀
+      - name: 装推理引擎
+        shell: pwsh
+        run: ./dist/CNM/CNM.exe --install-engine vulkan --engine-mirror https://gh-proxy.com/
+
+      - name: 打便携包（完整 + 精简）
+        shell: pwsh
+        run: |
+          ./deploy/portable.ps1 -SkipBuild
+          ./deploy/portable.ps1 -SkipBuild -NoEngine
+
+      # 安装包：CI 上没有本机那个汉化版 Inno，就装官方版；失败也不影响便携包发布
+      - name: 编译安装包（尽力而为）
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          ./installer/build.ps1
+
+      - name: 生成 SHA256 校验和
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist -File | Where-Object { $_.Name -match '^CNM-(Portable|Setup)-' } | Sort-Object Name
+          if ($files) {
+            $lines = $files | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+            [IO.File]::WriteAllLines('dist/SHA256SUMS.txt', $lines, (New-Object System.Text.UTF8Encoding($false)))
+            $lines | ForEach-Object { Write-Host $_ }
+          } else {
+            Write-Host '（没有可校验的产物）'
+          }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: cnm-${{ github.ref_name }}
+          path: |
+            dist/CNM-Portable-*.zip
+            dist/CNM-Setup-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: warn
+
+      - name: 发 Release（只有推 tag 才发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/CNM-Portable-*.zip
+            dist/CNM-Setup-*.exe
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false

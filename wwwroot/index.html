@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNM</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo" id="brandLogo" aria-hidden="true">
+        <svg class="mark" viewBox="0 0 64 64">
+          <g fill="none" stroke="#fff" stroke-width="4.4" stroke-linecap="round">
+            <path d="M32 14 L13 46" />
+            <path d="M32 14 L51 46" />
+            <path d="M13 46 L51 46" />
+          </g>
+          <circle cx="32" cy="14" r="6.4" fill="#fff" />
+          <circle cx="13" cy="46" r="6.4" fill="#fff" />
+          <circle cx="51" cy="46" r="6.4" fill="#fff" />
+        </svg>
+        <img class="custom" alt="">
+      </div>
+      <div class="brand-text">
+        <b>CNM</b>
+        <small>Chemingitch China Model</small>
+      </div>
+    </div>
+
+    <nav id="nav">
+      <button class="nav-item active" data-view="models"><span class="ic">▦</span>模型库</button>
+      <button class="nav-item" data-view="browse"><span class="ic">☁</span>在线浏览</button>
+      <button class="nav-item" data-view="service"><span class="ic">⇄</span>服务与日志</button>
+      <button class="nav-item" data-view="settings"><span class="ic">⚙</span>设置</button>
+    </nav>
+
+    <div class="side-foot">
+      <div class="mini" id="miniModel">未加载模型</div>
+      <div class="mini sub" id="miniService">服务已停止</div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div class="pill" id="pillEngine"><span class="dot"></span><span>引擎未加载</span></div>
+      <div class="pill" id="pillService"><span class="dot"></span><span>服务停止</span></div>
+      <div class="grow"></div>
+      <button class="btn primary" id="btnStart">启动服务</button>
+      <button class="btn" id="btnStop">停止</button>
+      <button class="btn ghost" id="btnTheme" title="切换主题">◐</button>
+    </header>
+
+    <!-- ============ 模型库 ============ -->
+    <section class="view" id="view-models">
+      <!-- 本地那一页的条：过滤 + 量化 + 排序（量化只对本地 .gguf 有意义） -->
+      <div class="row" id="toolLocal">
+        <div class="seg modelTabs">
+          <button class="seg-btn on" data-mtab="local">本地模型</button>
+          <button class="seg-btn" data-mtab="remote">外地模型</button>
+        </div>
+        <span class="grow"></span>
+        <input id="modelFilter" class="input" style="max-width:240px" placeholder="过滤（名字 / 量化 / 仓库）…">
+        <select id="modelQuant" class="input" style="max-width:130px"><option value="">全部量化</option></select>
+        <select id="modelSort" class="input" style="max-width:130px">
+          <option value="name">按名字</option>
+          <option value="size-desc">体积从大到小</option>
+          <option value="size-asc">体积从小到大</option>
+          <option value="quant">按量化</option>
+        </select>
+        <button class="btn" id="btnRescan">重新扫描</button>
+        <button class="btn" id="btnOpenModelsDir">打开目录</button>
+      </div>
+
+      <!-- 外地那一页的条：过滤 + 厂家 + 排序（外地模型没有量化，只有谁家的） -->
+      <div class="row hidden" id="toolRemote">
+        <div class="seg modelTabs">
+          <button class="seg-btn" data-mtab="local">本地模型</button>
+          <button class="seg-btn on" data-mtab="remote">外地模型</button>
+        </div>
+        <span class="grow"></span>
+        <input id="upFilter" class="input" style="max-width:240px" placeholder="过滤（模型 / 厂家 / 上游）…">
+        <select id="upLab" class="input" style="max-width:170px"><option value="">全部厂家</option></select>
+        <select id="upSort" class="input" style="max-width:130px">
+          <option value="name">按名字</option>
+          <option value="lab">按厂家</option>
+          <option value="recent">最近用过</option>
+        </select>
+        <button class="btn" id="btnRemoteRefresh">重新连接</button>
+        <button class="btn ghost" id="btnRemoteToWatch">去守望者</button>
+      </div>
+
+      <div class="hero" id="hero">
+        <div class="hero-main">
+          <div class="hero-title" id="heroTitle">没有加载模型</div>
+          <div class="hero-sub" id="heroSub">从下面的模型库里挑一个点“加载”，或者到“在线浏览”下一个新的</div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn" id="btnUnload">停止模型</button>
+        </div>
+      </div>
+
+      <div id="paneLocal">
+        <div class="cards" id="modelCards"></div>
+        <div class="empty" id="modelsEmpty" style="display:none">这个目录里还没扫到 .gguf。检查一下“设置”里的模型目录。</div>
+      </div>
+
+      <div id="paneRemote" class="hidden">
+        <div class="row" style="margin-bottom:10px">
+          <span class="badge b2">外地</span>
+          <span class="muted small" id="remoteSummary">—</span>
+        </div>
+        <div class="cards" id="remoteCards"></div>
+        <div class="empty" id="remoteEmpty" style="display:none">还没有外地模型 —— 先到「服务与日志 → 守望者」把中转站的地址和 Key 填上。</div>
+      </div>
+
+      <!-- 用量：日 / 月 / 年 -->
+      <div class="panel usage" id="usagePanel">
+        <div class="panel-head">
+          <b>用量</b>
+          <span class="muted small">所有 agent 调进来算的账（只记数字，不记对话内容）</span>
+          <span class="grow"></span>
+          <div class="seg" id="usageTabs">
+            <button class="seg-btn on" data-utab="day">日</button>
+            <button class="seg-btn" data-utab="month">月</button>
+            <button class="seg-btn" data-utab="year">年</button>
+          </div>
+        </div>
+        <div class="usage-totals" id="usageTotals">—</div>
+        <div class="usage-bars" id="usageBars"></div>
+        <div class="hint" id="usageHint">—</div>
+      </div>
+    </section>
+
+    <!-- ============ 在线浏览 ============ -->
+    <section class="view hidden" id="view-browse">
+      <div class="row">
+        <input id="hfQuery" class="input grow" placeholder="搜索模型（Qwen3 / Gemma / DeepSeek / Llama…）也可以搜品牌">
+        <select id="hfSort" class="input" style="max-width:140px">
+          <option value="downloads">下载量</option>
+          <option value="trendingScore">热门</option>
+          <option value="lastModified">最新</option>
+          <option value="likes">好评</option>
+        </select>
+        <button class="btn primary" id="btnHfSearch">搜索</button>
+      </div>
+      <div class="row">
+        <input id="urlInput" class="input grow" placeholder="或直接贴网址：HF 仓库页 / 任意 .gguf 直链">
+        <button class="btn" id="btnUrlGo">解析 / 下载</button>
+      </div>
+
+      <div class="split">
+        <div class="panel scroll" id="hfPanel">
+          <div class="phead">
+            <input id="hfFilter" class="input grow" placeholder="结果里再筛（名字 / 作者 / 品牌）…">
+            <span class="muted small" id="hfCount"></span>
+          </div>
+          <div id="hfResults">
+            <div class="empty">输入关键词搜索，源：hf-mirror.com（HF 国内镜像）</div>
+          </div>
+        </div>
+        <div class="panel scroll" id="hfFiles">
+          <div class="empty">点左边的仓库，这里会列出 GGUF 并自动勾好推荐量化</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <b>下载任务</b>
+          <span class="grow"></span>
+          <button class="btn tiny" id="btnClearDl">清理已完成</button>
+        </div>
+        <div id="dlList"><div class="empty small">没有下载任务</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 服务与日志 ============ -->
+    <section class="view hidden" id="view-service">
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-head"><b>哨兵</b><span class="muted small">对内 · 别人连进来的那道门</span></div>
+          <div class="kv"><label>Base URL</label><code id="svcBase">—</code><button class="btn tiny" data-copy="svcBase">复制</button><button class="btn tiny" id="btnOpenApi">浏览器打开</button></div>
+          <div class="kv"><label>API Key</label><code id="svcKey">—</code><button class="btn tiny" data-copy="svcKey">复制</button><button class="btn tiny" id="btnNewKey">换一个</button></div>
+          <div class="kv"><label>监听范围</label><span id="svcLan" class="muted">—</span></div>
+          <div class="kv"><label>运行模型</label><span id="svcModel" class="muted">—</span></div>
+          <div class="kv"><label>请求统计</label><span id="svcStats" class="muted">—</span></div>
+          <div class="hint">
+            给别的 agent（Cline / Continue / Cherry Studio / open-webui / 自己的脚本）就填两样：<br>
+            地址填上面的 <b>Base URL</b>，Key 填上面的 <b>API Key</b>。<br>
+            自测一行（<button class="btn tiny" data-copy="svcCurl">复制</button>）：
+            <code id="svcCurl">—</code>
+          </div>
+          <div class="hint">
+            本机的 GGUF 从这里出去：兼容 <code>/v1/models</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/embeddings</code>；
+            请求里 <code>model</code> 填 <b>/v1/models</b> 列出的 Id。开了「按请求自动加载」，要哪个模型就自动换哪个。
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><b>守望者</b><span class="muted small">对外 · 连你买的那些云</span><span class="grow"></span><button class="btn tiny" id="btnRefreshUp">全部重连</button></div>
+          <div id="upList"></div>
+          <div class="row">
+            <button class="btn ghost tiny" id="btnAddUp">+ 添加上游</button>
+            <span class="grow"></span>
+            <button class="btn primary tiny" id="btnSaveUp">保存上游</button>
+          </div>
+          <div class="kv"><label>现在默认走</label><span class="muted small" id="upCurrent">—</span></div>
+          <datalist id="proxyHints">
+            <option value="auto">自动检测（推荐）</option>
+            <option value="direct">直连（不走代理）</option>
+            <option value="system">跟随系统代理</option>
+            <option value="http://127.0.0.1:7890">Clash / Verge 常用</option>
+            <option value="http://127.0.0.1:10809">v2rayN（http）</option>
+            <option value="socks5://127.0.0.1:1080">socks5 常用</option>
+          </datalist>
+          <div class="hint">
+            这里只填中转站的地址和 Key（点「测试」能列出模型就是通了）；<b>模型在「模型库 → 外地模型」里挑</b>，
+            点「接入」就是把它设成<b>兜底模型</b>：agent 里写别的外地模型名照样用它自己，写不认识的名字才落到这个。<br>
+            代理那格填 <b>auto</b>（或点「自动检测」）就不用自己猜了：CNM 会并发试「直连 → 系统代理 → 本机常见端口」，
+            谁通用谁，并记住它。写死也行：<code>http://127.0.0.1:7890</code>、<code>socks5://127.0.0.1:1080</code>、<code>system</code>、<code>direct</code>。
+            本机库里的 GGUF 仍然优先走本地引擎。
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>请求日志</b><span class="muted" id="reqSum"></span></div>
+        <div class="scroll tall">
+          <table class="table" id="reqTable">
+            <thead><tr><th>时间</th><th>来源</th><th>方法</th><th>模型</th><th>状态</th><th>耗时</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>引擎日志</b><span class="grow"></span><button class="btn tiny" id="btnOpenLogFile">日志文件</button><button class="btn tiny" id="btnClearLog">清空</button></div>
+        <pre class="logbox" id="logBox"></pre>
+      </div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="view hidden" id="view-settings">
+      <div class="panel">
+        <div class="panel-head"><b>模型目录</b></div>
+        <div class="kv"><label>主目录</label><input class="input grow" id="setModelsDir"></div>
+        <div class="kv"><label>附加目录</label><input class="input grow" id="setExtraDirs" placeholder="多个目录用 ; 分隔，可留空"></div>
+        <div class="hint">沿用 LM Studio 的 <code>&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf</code> 布局，两边可以共用一个目录，互不干扰。</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>服务</b></div>
+        <div class="kv"><label>端口</label><input class="input" style="max-width:120px" id="setPort" type="number" min="1" max="65535"></div>
+        <div class="kv"><label>局域网可访问</label><label class="switch"><input type="checkbox" id="setLan"><span></span></label></div>
+        <div class="kv"><label>API Key</label><input class="input grow" id="setKey"></div>
+        <div class="kv"><label>开机自动开服务</label><label class="switch"><input type="checkbox" id="setAutoStart"><span></span></label></div>
+        <div class="kv"><label>模型列表也要 Key</label><label class="switch"><input type="checkbox" id="setModelsKey"><span></span></label>
+          <span class="muted small">开着：<code>/v1/models</code> 不带 key 也是 401</span></div>
+        <div class="kv"><label>按请求自动加载模型</label><label class="switch"><input type="checkbox" id="setAutoLoad"><span></span></label></div>
+        <div class="kv"><label>启动时加载上次的模型</label><label class="switch"><input type="checkbox" id="setAutoLast"><span></span></label></div>
+        <div class="kv"><label>空闲自动卸载</label><select class="input" style="max-width:150px" id="setIdle">
+          <option value="0">不自动卸载</option>
+          <option value="5">空闲 5 分钟</option>
+          <option value="10">空闲 10 分钟</option>
+          <option value="30">空闲 30 分钟</option>
+          <option value="60">空闲 60 分钟</option>
+        </select><span class="muted small">没人调用就放出显存，下次请求再自动加载</span></div>
+        <div class="kv"><label>关窗收进托盘（服务不断）</label><label class="switch"><input type="checkbox" id="setTray"><span></span></label></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>推理参数</b></div>
+        <div class="kv"><label>上下文长度</label><input class="input" style="max-width:140px" id="setCtx" type="number" step="512"><span class="muted small">越大越吃显存</span></div>
+        <div class="kv"><label>GPU 层数</label><input class="input" style="max-width:140px" id="setNgl" type="number"><span class="muted small">99 = 全部丢显卡</span></div>
+        <div class="kv"><label>CPU 线程</label><input class="input" style="max-width:140px" id="setThreads" type="number"><span class="muted small">0 = 自动</span></div>
+        <div class="kv"><label>并行槽位</label><input class="input" style="max-width:140px" id="setParallel" type="number"></div>
+        <div class="kv"><label>Flash Attention</label><label class="switch"><input type="checkbox" id="setFa"><span></span></label></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>推理引擎（llama.cpp）</b></div>
+        <div class="kv"><label>本机显卡</label><span id="gpuHint" class="muted small">正在认显卡……</span></div>
+        <div class="kv"><label>当前引擎</label><span id="engineInfo" class="muted">未检测</span></div>
+        <div class="row">
+          <select id="engineVariant" class="input" style="max-width:220px">
+            <option value="vulkan">Vulkan（A 卡 / I 卡 / N 卡通吃，推荐）</option>
+            <option value="cpu">CPU（纯处理器）</option>
+            <option value="rocm">ROCm 10.0（AMD，约 250 MB）</option>
+            <option value="cuda-13.4">CUDA 13.4（NVIDIA，另需 cudart）</option>
+            <option value="cuda-12.4">CUDA 12.4（NVIDIA 老驱动）</option>
+          </select>
+          <button class="btn" id="btnInstallEngine">下载并安装引擎</button>
+          <button class="btn ghost" id="btnProbeEngine">重新检测</button>
+          <button class="btn ghost" id="btnEngineUpdate">检查更新</button>
+        </div>
+        <div class="kv"><label>版本</label><span id="engineLatest" class="muted small">没查过 —— 点「检查更新」看看官方最新版是哪个</span></div>
+        <div class="kv">
+          <label>加速前缀</label>
+          <input class="input grow" id="setEngineMirror" placeholder="留空 = 直连 GitHub（慢但能用）">
+          <select class="input" id="mirrorPreset" style="max-width:170px">
+            <option value="">常用镜像…</option>
+            <option value="https://gh-proxy.com/">gh-proxy.com（推荐）</option>
+            <option value="https://ghproxy.net/">ghproxy.net</option>
+            <option value="https://ghfast.top/">ghfast.top</option>
+            <option value="https://hub.gitmirror.com/">gitmirror</option>
+          </select>
+        </div>
+        <div class="kv"><label>下载说明</label><span class="muted small">慢或断了不用重来：进度存在 <code>%TEMP%\cnm-engine-&lt;后端&gt;.zip.part</code>，再点一次会<b>接着下</b>；换镜像也接着下。</span></div>
+        <div class="kv"><label>本地包安装</label><button class="btn ghost" id="btnInstallZip">选择本地 zip 安装…</button><span class="muted small">网慢就先用浏览器/下载器把 <code>llama-…-win-vulkan-x64.zip</code> 下好，再从这里选</span></div>
+        <div class="kv"><label>手动指定</label><input class="input grow" id="setEnginePath" placeholder="留空 = 用 engine\llama\llama-server.exe"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><b>外观与图标</b></div>
+        <div class="kv"><label>主题</label><select class="input" id="setTheme" style="max-width:160px"><option value="dark">深色</option><option value="light">浅色</option></select><span class="muted small">切换立刻生效</span></div>
+        <div class="kv">
+          <label>图标</label>
+          <div class="icon-row">
+            <div class="icon-prev" id="iconPrev"></div>
+            <button class="btn" id="btnPickIcon">选择图片…</button>
+            <button class="btn ghost" id="btnResetIcon">恢复默认</button>
+            <input type="file" id="iconFile" accept="image/png,image/jpeg,image/bmp,image/gif,image/x-icon" style="display:none">
+          </div>
+        </div>
+        <div class="hint">
+          PNG / JPG / ICO / GIF 都行，正方形最好（≥ 256×256）。换完之后：侧栏 logo、窗口图标、托盘图标一起变；
+          打包出来的 exe 图标也会跟着用这张图。
+        </div>
+        <div class="kv"><label>模型源</label><input class="input grow" id="setHf" placeholder="https://hf-mirror.com"></div>
+      </div>
+
+      <div class="row end">
+        <button class="btn primary" id="btnSave">保存设置</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toasts"></div>
+
+<script src="logos.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

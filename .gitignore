@@ -1,0 +1,18 @@
+# 构建产物（发布出来的 exe / dll 一大堆，别进仓库）
+bin/
+obj/
+dist/
+
+# 推理引擎：80+ MB 的二进制，靠 CNM.exe --install-engine 或界面里下载，不进仓库
+engine/
+
+# 本地模型（万一把模型目录设到仓库里了）
+models/
+
+# 杂项
+*.user
+*.part
+*.zip
+*.7z
+.vs/
+.idea/
