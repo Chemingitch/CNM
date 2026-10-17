@@ -32,6 +32,15 @@ if (-not $SkipBuild) {
 }
 if (-not (Test-Path (Join-Path $dist 'CNM.exe'))) { throw "没找到 $dist\CNM.exe —— 先跑一次 build.ps1" }
 
+# 完整版必须有引擎。少了这个检查，就会打出一个「名叫完整、其实和精简包一模一样」的包
+# （CI 上真发生过：装引擎那步 403 限流失败，于是两个 zip 大小、哈希完全相同，谁也没发现）
+if (-not $NoEngine) {
+    $srv = Join-Path $dist 'engine\llama\llama-server.exe'
+    if (-not (Test-Path $srv)) {
+        throw "完整便携包要有引擎，但没找到 $srv —— 先跑 CNM.exe --install-engine vulkan，或者改打 -NoEngine 精简包"
+    }
+}
+
 $name = if ($NoEngine) { "CNM-Portable-Lite-$Version" } else { "CNM-Portable-$Version" }
 $zip = Join-Path $outDir "$name.zip"
 $stage = Join-Path $env:TEMP ('cnm-portable-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))

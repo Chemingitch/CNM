@@ -20,6 +20,13 @@ public static class EngineInstaller
     /// <summary>支持的 llama.cpp Windows 后端</summary>
     public static readonly string[] Variants = { "vulkan", "cpu", "rocm", "cuda-12.4", "cuda-13.4" };
 
+    /// <summary>
+    /// 查发布列表用的 GitHub 令牌（可选，只读公开仓库，不需要任何权限）。
+    /// 匿名查 api.github.com 会被限流（403 rate limit），共享出口 IP 的机器 / CI 上尤其容易撞上；
+    /// 命令行 <c>--engine-token</c> 或环境变量 <c>GITHUB_TOKEN</c> / <c>GH_TOKEN</c> 给上就能避开。
+    /// </summary>
+    public static string Token = "";
+
     /// <summary>没下完的临时文件（变化时文件名固定，才能续传）</summary>
     public static string PartPath(string variant) =>
         Path.Combine(Path.GetTempPath(), "cnm-engine-" + (variant.Length > 0 ? variant : "local") + ".zip.part");
@@ -91,7 +98,10 @@ public static class EngineInstaller
         catch (Exception ex)
         {
             log("[安装失败] " + ex.Message);
-            return (false, "安装引擎失败：" + ex.Message + "（网不通就直接用本地 zip 安装）", "");
+            var hint = ex.Message.Contains("403") || ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+                ? "（GitHub 匿名查询发布列表被限流了：给个只读令牌 --engine-token <token>，或设环境变量 GITHUB_TOKEN）"
+                : "（网不通就直接用本地 zip 安装）";
+            return (false, "安装引擎失败：" + ex.Message + hint, "");
         }
     }
 
@@ -160,6 +170,9 @@ public static class EngineInstaller
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("CNM/0.1");
+        var token = (Token ?? "").Trim();
+        if (token.Length > 0)
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var relTxt = await http.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=8");
         if (JsonNode.Parse(relTxt) is not JsonArray rels) return (null, null, 0, null);
 

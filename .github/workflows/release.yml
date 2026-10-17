@@ -40,10 +40,26 @@ jobs:
         shell: pwsh
         run: ./build.ps1
 
-      # 引擎不进仓库（80+ MB 二进制），CI 里现装：官方最新 Vulkan 版，走加速前缀
+      # 引擎不进仓库（80+ MB 二进制），CI 里现装：官方最新 Vulkan 版
+      # 两个坑（0.1.3 第一次发版就踩了，整条流水线还全绿）：
+      #   ① 匿名查 api.github.com 会被限流（403 rate limit）→ 带上 Actions 自带的只读令牌；
+      #   ② 装失败了也必须让这一步红掉 —— 否则会打出一个「名叫完整、其实和精简包一模一样」的包。
       - name: 装推理引擎
         shell: pwsh
-        run: ./dist/CNM/CNM.exe --install-engine vulkan --engine-mirror https://gh-proxy.com/
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            ./dist/CNM/CNM.exe --install-engine vulkan --engine-token $env:GITHUB_TOKEN
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "::warning::第 $i 次装引擎失败（退出码 $LASTEXITCODE），10 秒后重试"
+            Start-Sleep -Seconds 10
+          }
+          if ($LASTEXITCODE -ne 0) { throw "装引擎失败（退出码 $LASTEXITCODE）——完整版便携包必须有引擎" }
+          $srv = 'dist/CNM/engine/llama/llama-server.exe'
+          if (-not (Test-Path $srv)) { throw "引擎装完却没看到 $srv" }
+          $f = Get-Item $srv
+          Write-Host ("引擎就位：{0}（{1:N1} MB）" -f $f.FullName, ($f.Length / 1MB))
 
       - name: 打便携包（完整 + 精简）
         shell: pwsh
@@ -51,13 +67,24 @@ jobs:
           ./deploy/portable.ps1 -SkipBuild
           ./deploy/portable.ps1 -SkipBuild -NoEngine
 
-      # 安装包：CI 上没有本机那个汉化版 Inno，就装官方版；失败也不影响便携包发布
+      # 安装包：CI 上没有本机那个汉化版 Inno，就装官方版；失败也不影响便携包发布，
+      # 但要在日志里明说（0.1.3 第一次发版就是引擎缺失 → 安装包编译中止 → 悄悄只剩便携包）
       - name: 编译安装包（尽力而为）
         continue-on-error: true
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
           ./installer/build.ps1
+
+      - name: 自检（产物齐不齐）
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -File -Filter 'CNM-Setup-*.exe' -ErrorAction SilentlyContinue
+          if (-not $setup) { Write-Host '::warning::没生成安装包 —— Release 里将只有便携包（看上一段的 ISCC 报错）' }
+          else { Write-Host ("安装包就位：{0}（{1:N1} MB）" -f $setup.Name, ($setup.Length / 1MB)) }
+          Get-ChildItem dist -File | Where-Object { $_.Name -match '^CNM-' } | ForEach-Object {
+            Write-Host ("  {0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB))
+          }
 
       - name: 生成 SHA256 校验和
         shell: pwsh

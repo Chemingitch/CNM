@@ -79,6 +79,7 @@ internal static class Program
         // 无界面装引擎 / 修引擎（自动化用）：
         //   CNM.exe --install-engine [vulkan|cpu|rocm|cuda-12.4|cuda-13.4] [--engine-mirror <加速前缀>] [--engine-dir <目录>]
         //   CNM.exe --install-engine-zip <本地.zip>                        [--engine-dir <目录>]
+        //   [--engine-token <GitHub 只读令牌>] 避开匿名查发布列表被限流（也可用环境变量 GITHUB_TOKEN / GH_TOKEN）
         if (args.Contains("--install-engine") || args.Contains("--install-engine-zip"))
         {
             try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
@@ -106,6 +107,14 @@ internal static class Program
             var mirror = Opt("--engine-mirror");
             if (mirror.Length == 0) { try { mirror = Settings.Load().EngineMirror; } catch { } }
             var dir = Opt("--engine-dir");
+
+            // 令牌：--engine-token 优先，其次环境变量（CI 里给 GITHUB_TOKEN 就不会被匿名限流）
+            EngineInstaller.Token = Opt("--engine-token");
+            if (EngineInstaller.Token.Length == 0)
+            {
+                EngineInstaller.Token = (Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                                      ?? Environment.GetEnvironmentVariable("GH_TOKEN") ?? "").Trim();
+            }
 
             Environment.Exit(EngineInstaller.RunCliAsync(variant, zip, mirror, dir.Length > 0 ? Path.GetFullPath(dir) : null)
                 .GetAwaiter().GetResult());

@@ -231,6 +231,9 @@ CNM.exe --install-engine vulkan --engine-mirror https://gh-proxy.com/
 # 用已经下好的包装（网再慢都不怕）
 CNM.exe --install-engine-zip D:\下载\llama-b11712-bin-win-vulkan-x64.zip
 
+# 匿名查 GitHub 发布列表被限流（403 rate limit）时，给个只读令牌 —— CI 里就这么用
+CNM.exe --install-engine vulkan --engine-token $env:GITHUB_TOKEN
+
 # 装到别的地方（默认装到 exe 同级的 engine\llama\）
 CNM.exe --install-engine cpu --engine-dir D:\CNM-engine
 ```
