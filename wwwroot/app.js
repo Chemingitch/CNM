@@ -1278,8 +1278,6 @@ function bind() {
     $('#setExtraDirs').value = parts.join(';');
     await saveSettings('附加目录已加上 ' + dir + '，正在重新扫描…');
   });
-  $('#btnSaveModels').addEventListener('click', () => saveSettings('设置已保存，正在重新扫描…'));
-
   $('#btnSave').addEventListener('click', () => saveSettings('设置已保存'));
 }
 
@@ -1287,7 +1285,7 @@ function bind() {
 function markDirty() {
   S.dirty = true;
   const el = $('#setDirtyHint');
-  if (el) el.textContent = '有改动还没保存 →';
+  if (el) el.textContent = '手改的路径还没保存 —— 记得按最下面的「保存设置」';
 }
 
 /** 弹系统「选择文件夹」窗口；用户取消返回 null */
