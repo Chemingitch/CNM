@@ -152,11 +152,28 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
 
+        //   CNM.exe --pick-folder [起始目录]    单看一眼系统的「选择文件夹」窗口（自检用）
+        if (args.Contains("--pick-folder"))
+        {
+            try
+            {
+                Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput(),
+                    new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+            }
+            catch { }
+            var idx = Array.IndexOf(args, "--pick-folder");
+            var start = idx + 1 < args.Length && !args[idx + 1].StartsWith("--") ? args[idx + 1] : "";
+            var picked = FolderPicker.Pick(null, "选择模型目录", start);
+            Console.WriteLine(picked == null ? "取消" : picked);
+            if (FolderPicker.LastNote.Length > 0) Console.WriteLine("[自检] " + FolderPicker.LastNote);
+            return;
+        }
+
         using var mutex = new Mutex(true, "CNM.SingleInstance.v1", out bool first);
         if (!first)
         {
-            MessageBox.Show("CNM 已经在运行 —— 看右下角托盘图标。", "CNM",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // 自绘提示框：原生 MessageBox 不受应用主题管，深色界面下会突然冒出一块白的
+            ThemedDialog.Info("CNM 已经在运行 —— 看右下角托盘图标。", "CNM");
             return;
         }
 

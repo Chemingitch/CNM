@@ -244,10 +244,17 @@
     <!-- ============ 设置 ============ -->
     <section class="view hidden" id="view-settings">
       <div class="panel">
-        <div class="panel-head"><b>模型目录</b></div>
-        <div class="kv"><label>主目录</label><input class="input grow" id="setModelsDir"></div>
-        <div class="kv"><label>附加目录</label><input class="input grow" id="setExtraDirs" placeholder="多个目录用 ; 分隔，可留空"></div>
-        <div class="hint">沿用 LM Studio 的 <code>&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf</code> 布局，两边可以共用一个目录，互不干扰。</div>
+        <div class="panel-head">
+          <b>模型目录</b>
+          <span class="muted small grow" id="setDirtyHint"></span>
+          <button class="btn primary tiny" id="btnSaveModels">保存并重新扫描</button>
+        </div>
+        <div class="kv"><label>主目录</label><input class="input grow" id="setModelsDir"><button class="btn ghost tiny" id="btnPickModelsDir">选择目录…</button></div>
+        <div class="kv"><label>附加目录</label><input class="input grow" id="setExtraDirs" placeholder="多个目录用 ; 分隔，可留空"><button class="btn ghost tiny" id="btnPickExtraDir">追加目录…</button></div>
+        <div class="hint">
+          沿用 LM Studio 的 <code>&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf</code> 布局，两边可以共用一个目录，互不干扰。<br>
+          点「选择目录…」直接挑（选完自动保存并重新扫描）；手填路径的话，记得按这一栏右上角的「保存并重新扫描」。
+        </div>
       </div>
 
       <div class="panel">

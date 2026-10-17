@@ -494,6 +494,13 @@ async function setTheme(t) {
 }
 
 /* ---------------- 模型库 ---------------- */
+
+/** 本地模型卡片左边那个「谁家的」标，喂给 logos.js 的字符串。
+ *  只给 作者/仓库/显示名 —— 不带架构名，否则会认错（Bonsai 的 arch 是 qwen35，但它不是千问家的）。 */
+function localKey(m) {
+  return [m.publisher, m.repo, m.name].filter(Boolean).join('/');
+}
+
 function renderModels() {
   const q = ($('#modelFilter').value || '').trim().toLowerCase();
 
@@ -529,6 +536,7 @@ function renderModels() {
   wrap.innerHTML = list.map((m) => `
     <div class="card ${m.loaded ? 'loaded' : ''}">
       <div class="card-top">
+        ${logoTile(localKey(m))}
         <div style="min-width:0">
           <div class="card-name">${esc(m.name)}</div>
           <div class="card-repo">${esc(m.repo)}${m.publisher ? ' · ' + esc(m.publisher) : ''}</div>
@@ -549,6 +557,7 @@ function renderModels() {
         <button class="btn tiny" data-del="${esc(m.id)}">删除</button>
       </div>
     </div>`).join('');
+  ensureLogos(list.map(localKey));      // 本地模型也认「谁家的」：QwenPaw → 千问、Llama…，认不出就首字母色块
 
   wrap.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', async () => {
     const id = b.dataset.load;
@@ -1196,7 +1205,7 @@ function bind() {
   $('#mirrorPreset').addEventListener('change', (e) => {
     if (!e.target.value) return;
     $('#setEngineMirror').value = e.target.value;
-    S.dirty = true;
+    markDirty();
     toast('已填入前缀，记得点保存设置；下载时会先走镜像，不行自动回落直连', 'ok');
   });
 
@@ -1250,20 +1259,58 @@ function bind() {
   });
 
   $$('#view-settings .input, #view-settings input[type=checkbox]').forEach((el) => {
-    el.addEventListener('change', () => { S.dirty = true; });
-    el.addEventListener('input', () => { S.dirty = true; });
+    el.addEventListener('change', markDirty);
+    el.addEventListener('input', markDirty);
   });
 
-  $('#btnSave').addEventListener('click', async () => {
-    const settings = collectSettings();
-    try {
-      const r = await call('saveSettings', { settings });
-      S.dirty = false;
-      applyTheme(settings.theme);
-      toast('设置已保存', 'ok');
-      if (r && r.settings) fillSettings(r.settings);
-    } catch (e) { toast(e.message, 'error'); }
+  // 模型目录：调系统的「选择文件夹」窗口，不用手打路径；选完直接落盘 + 重新扫描
+  $('#btnPickModelsDir').addEventListener('click', async () => {
+    const dir = await pickDir($('#setModelsDir').value.trim(), '选择模型目录');
+    if (!dir) return;
+    $('#setModelsDir').value = dir;
+    await saveSettings('模型目录已改成 ' + dir + '，正在重新扫描…');
   });
+  $('#btnPickExtraDir').addEventListener('click', async () => {
+    const dir = await pickDir($('#setModelsDir').value.trim(), '追加一个模型目录');
+    if (!dir) return;
+    const parts = $('#setExtraDirs').value.split(';').map((s) => s.trim()).filter(Boolean);
+    if (!parts.some((p) => p.toLowerCase() === dir.toLowerCase())) parts.push(dir);
+    $('#setExtraDirs').value = parts.join(';');
+    await saveSettings('附加目录已加上 ' + dir + '，正在重新扫描…');
+  });
+  $('#btnSaveModels').addEventListener('click', () => saveSettings('设置已保存，正在重新扫描…'));
+
+  $('#btnSave').addEventListener('click', () => saveSettings('设置已保存'));
+}
+
+/** 有改动没落盘：提醒一句（设置页只有「保存设置」这一键会真正存下来） */
+function markDirty() {
+  S.dirty = true;
+  const el = $('#setDirtyHint');
+  if (el) el.textContent = '有改动还没保存 →';
+}
+
+/** 弹系统「选择文件夹」窗口；用户取消返回 null */
+async function pickDir(current, title) {
+  try {
+    const r = await call('pickFolder', { current: current || '', title: title });
+    if (!r || r.ok === false) return null;      // 取消：静静收场，别当错误报
+    return r.path || null;
+  } catch (e) { toast(e.message, 'error'); return null; }
+}
+
+/** 保存设置（「保存设置」和「保存并重新扫描」都走这里） */
+async function saveSettings(okText) {
+  const settings = collectSettings();
+  try {
+    const r = await call('saveSettings', { settings });
+    S.dirty = false;
+    const el = $('#setDirtyHint');
+    if (el) el.textContent = '';
+    applyTheme(settings.theme);
+    toast(okText || '设置已保存', 'ok');
+    if (r && r.settings) { S.settings = r.settings; fillSettings(r.settings); }
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function doSearch() {

@@ -2,7 +2,9 @@
  *
  * 在线浏览 / 模型库 / 外地模型 的每一行、每一张卡左边挂一个厂家色块 ——
  * 一眼分得清 Qwen、Llama、DeepSeek、Gemma、Mistral…，不用去读那串仓库名。
- * 认不出来的用「作者名首字母 + 稳定色相」兜底，至少每家的颜色不一样。
+ * 本地模型（<作者>\<仓库>\xxx.gguf）也走这一套；打包站（lmstudio-community、bartowski…）
+ * 不算厂家，会自动跳过作者、用仓库名/模型名兜底。
+ * 认不出来的用「名字首字母 + 稳定色相」兜底，至少每家的颜色不一样。
  *
  * 想加一家：往 LABS 里加一条就行（name 显示名 / mark 方块里的字 / bg 底色 / who 作者小写 / re 名字里的特征）。
  */
@@ -32,6 +34,12 @@
     { name: '嵌入 / 向量', cn: '向量', mark: 'vec', bg: 'linear-gradient(135deg,#4FD1C5,#0F8D86)', re: /(^|[-_/])(bge|gte|e5|nomic|qwen3-embedding|embed)/i },
     { name: 'Stability · 图像', cn: '图像', mark: 'SD', bg: 'linear-gradient(135deg,#C77DFF,#7B2CBF)', re: /stable-?diffusion|sdxl|flux/i, hf: 'stabilityai' }
   ];
+  /** 打包站：把别人家的模型转成 GGUF 的（lmstudio-community、bartowski…）。
+   *  它们不算「谁家的」—— 认标时跳过作者，看仓库名和模型名。 */
+  const PACKAGERS = ['lmstudio-community', 'lmstudio', 'bartowski', 'unsloth', 'thebloke', 'mradermacher',
+    'ggml-org', 'gguf', 'quantfactory', 'maziyarpanahi', 'second-state', 'tensorblock', 'davidaup',
+    'nightmedia', 'ubergarm', 'jeffaf', 'richarderkh', 'bullerwins', 'prunaai', 'gaianet', 'trianglegrrl'];
+
   const CACHE = new Map();
   const LOGOS = {};     // key -> data:image/…（从后端那儿要来的真 logo / 真头像）
   const TRIED = {};     // key -> 1（问过一次就别反复联网）
@@ -47,23 +55,39 @@
     return h % 360;
   }
 
-  /** 认出这是谁家的：先看作者（Org），再看名字里的特征；都不认识就用作者名首字母兜底 */
+  /** 只能小标签放得下的一小段字 */
+  function shortName(s) {
+    const x = String(s || '').trim();
+    return x.length > 12 ? x.slice(0, 12) + '…' : x;
+  }
+
+  /** 认不出厂家时的兜底：名字的第一段 + 稳定色相（同一个名字永远同一个颜色） */
+  function fallbackLab(text, label) {
+    const seed = String(text || '').trim() || '?';
+    const fam = seed.split(/[\/\-_ .]+/).filter(Boolean)[0] || seed;
+    return {
+      name: shortName(label || fam),
+      mark: (fam[0] || '?').toUpperCase(),
+      bg: 'linear-gradient(135deg,hsl(' + hashHue(seed) + ' 52% 52%),hsl(' + hashHue(seed) + ' 52% 36%))',
+      unknown: true
+    };
+  }
+
+  /** 认出这是谁家的：先看作者（Org），再看名字里的特征；都不认识就用仓库名/模型名兜底 */
   function labOf(repo) {
     const id = String(repo || '').trim();
     if (CACHE.has(id)) return CACHE.get(id);
     const slash = id.indexOf('/');
     const author = (slash > 0 ? id.slice(0, slash) : id).toLowerCase();
+    const rest = slash > 0 ? id.slice(slash + 1) : '';
+    const isPacker = PACKAGERS.indexOf(author) >= 0;
 
-    let lab = LABS.find((l) => l.who && l.who.indexOf(author) >= 0);
+    let lab = isPacker ? null : LABS.find((l) => l.who && l.who.indexOf(author) >= 0);
     if (!lab) for (const l of LABS) { if (l.re && l.re.test(id)) { lab = l; break; } }
     if (!lab) {
-      const seed = author || id || '?';
-      lab = {
-        name: slash > 0 ? author : '其他',
-        mark: (seed[0] || '?').toUpperCase(),
-        bg: 'linear-gradient(135deg,hsl(' + hashHue(seed) + ' 52% 52%),hsl(' + hashHue(seed) + ' 52% 36%))',
-        unknown: true
-      };
+      // 打包站（lmstudio-community 这类）不算「谁家的」：拿仓库名/模型名兜底，
+      // 挂个「lmstudio-community」当厂家没意义，颜色也认不出来。
+      lab = slash < 0 ? fallbackLab(id, '其他') : fallbackLab(isPacker ? (rest || id) : author);
     }
     CACHE.set(id, lab);
     return lab;
@@ -78,6 +102,8 @@
     const slash = id.indexOf('/');
     if (slash > 0) {
       const author = id.slice(0, slash);
+      // 打包站的头像是它自己的，不代表模型是谁家的 —— 本地模型也别挂成 lmstudio-community
+      if (PACKAGERS.indexOf(author.toLowerCase()) >= 0) return null;
       if (/^[A-Za-z0-9._-]{1,60}$/.test(author)) return { key: 'avatar:' + author.toLowerCase(), kind: 'avatar', name: author };
     }
     return null;

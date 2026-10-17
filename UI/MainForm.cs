@@ -172,7 +172,7 @@ public sealed class MainForm : Form
         var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         if (!Directory.Exists(wwwroot))
         {
-            MessageBox.Show(this, "找不到界面目录：\n" + wwwroot, "CNM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ThemedDialog.Error("找不到界面目录：\n" + wwwroot, "CNM", !IsLight, this);
             return;
         }
         try
@@ -183,10 +183,10 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this,
+            ThemedDialog.Error(
                 "初始化 WebView2 失败：\n" + ex.Message +
                 "\n\nWin11 自带 WebView2；Win10 需要装一下微软的 WebView2 Runtime（Evergreen 版）。",
-                "CNM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                "CNM", !IsLight, this);
             return;
         }
 

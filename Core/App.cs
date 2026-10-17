@@ -509,6 +509,17 @@ public sealed class App
                 return await InstallEngineAsync("", zip);
             }
 
+            // 设置页那个「选择目录…」按钮：弹系统的选择文件夹窗口，选中的路径回给界面填进输入框
+            case "pickFolder":
+            {
+                var title = msg["title"]?.GetValue<string>() ?? "选择文件夹";
+                var cur = msg["current"]?.GetValue<string>() ?? "";
+                var picked = CNM.UI.FolderPicker.Pick(Form.ActiveForm, title, cur);
+                return picked == null
+                    ? new JsonObject { ["ok"] = false, ["cancelled"] = true }      // 用户取消，别报错
+                    : new JsonObject { ["ok"] = true, ["path"] = picked };
+            }
+
             case "saveSettings":
             {
                 var s = msg["settings"] as JsonObject;
