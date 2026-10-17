@@ -43,7 +43,11 @@ try {
     $rcArgs = @($dist, $stageRoot, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:1', '/W:1')
     if ($NoEngine) { $rcArgs += @('/XD', (Join-Path $dist 'engine')) }
     & robocopy @rcArgs | Out-Null
-    if ($LASTEXITCODE -ge 8) { throw "复制文件失败（robocopy exit $LASTEXITCODE）" }
+    $rc = $LASTEXITCODE
+    # robocopy 正常复制时也返回 1（不是错误），而 pwsh -File 会把 $LASTEXITCODE 当成脚本退出码，
+    # 于是 CI 会把「打包成功」判成失败。先把码抓走，再显式清零（必须写 $global:，否则只是脚本作用域的影子变量）。
+    $global:LASTEXITCODE = 0
+    if ($rc -ge 8) { throw "复制文件失败（robocopy exit $rc）" }
 
     Copy-Item (Join-Path $payload '启动 CNM.cmd') $stageRoot -Force
     Copy-Item (Join-Path $payload 'start.ps1') $stageRoot -Force
