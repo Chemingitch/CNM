@@ -53,7 +53,11 @@ jobs:
           $srv = 'dist/CNM/engine/llama/llama-server.exe'
           for ($i = 1; $i -le 3; $i++) {
             Write-Host "== 第 $i 次装引擎 =="
-            ./dist/CNM/CNM.exe --install-engine vulkan --engine-token $env:GITHUB_TOKEN
+            # CNM.exe 是 GUI 子系统程序：用 & 直接调用，pwsh 不等它跑完就返回（所以 $LASTEXITCODE 是空的，
+            # 文件也可能还没落盘 —— 上一版就是这么误判的）。用 Start-Process -Wait 老老实实等它结束。
+            $p = Start-Process -FilePath './dist/CNM/CNM.exe' -NoNewWindow -Wait -PassThru `
+                 -ArgumentList '--install-engine', 'vulkan', '--engine-token', $env:GITHUB_TOKEN
+            Write-Host "  安装器退出码 $($p.ExitCode)"
             if (Test-Path $srv) { break }
             Write-Host "::warning::第 $i 次装完还是没看到 llama-server.exe，10 秒后重试"
             Start-Sleep -Seconds 10
