@@ -5,7 +5,7 @@
 ; ============================================================
 
 #define AppName "CNM"
-#define AppVer "0.2.1"
+#define AppVer "0.2.2"
 #define AppPub "Chemingitch"
 
 [Setup]
