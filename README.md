@@ -4,8 +4,7 @@
 OpenCode、Cherry Studio、任何 OpenAI SDK 客户端都能直接接；
 顺带能在线浏览 / 下载模型，界面是深色小窗，关窗收进托盘也不断服务。
 
-> 参考了 LM Studio 的能力（本机 `Bionic.exe` 就是 LM Studio 的换名版），但**没有搬它的代码** ——
-> 它是专有软件。这里复刻的是公开技术栈：llama.cpp（MIT，自带 OpenAI 兼容 server）+ HuggingFace 公开 API + GGUF 公开格式。
+> 公开技术栈拼出来的：llama.cpp（MIT，自带 OpenAI 兼容 server）+ HuggingFace 公开 API + GGUF 公开格式。
 
 ---
 
@@ -19,7 +18,7 @@ OpenCode、Cherry Studio、任何 OpenAI SDK 客户端都能直接接；
 | `CNM-Portable-<版本>.zip` | 93 MB | 免安装便携版，**带**推理引擎（Vulkan 版）：解压 → 双击 `启动 CNM.cmd`（或直接双击 `CNM.exe`）就能用 |
 | `CNM-Portable-Lite-<版本>.zip` | 62 MB | 精简便携版，**不带引擎**：初次打开后到「设置 → 推理引擎（llama.cpp）」点「下载并安装引擎」，它会按你的显卡推荐后端 |
 
-三个包都**不用**装 .NET（自带运行时）、不用 Python、不用 Ollama / LM Studio。
+三个包都**不用**装 .NET（自带运行时）、不用 Python、不用任何别的推理框架。
 引擎要是没带，程序里能一键下载，而且带**镜像加速 + 断点续传 + 装本地 zip**（慢网、断线都不用从头再来）。
 
 > 模型是几个 GB 起步的大文件，所以**不放进任何安装包**——第一次用去「模型库 → 在线浏览」下一个，
@@ -35,8 +34,8 @@ OpenCode、Cherry Studio、任何 OpenAI SDK 客户端都能直接接；
 ## 一分钟上手
 
 1. 双击 `dist\CNM\CNM.exe`（自包含版，自带运行时，不用装 .NET）。
-2. 首次打开会自动扫描模型目录 —— 默认就是你这套：`E:\C\CTools\AI Make\LLM\models`
-   （沿用 LM Studio 的 `<作者>\<仓库>\xxx.gguf` 布局，**两个程序可以共用同一个目录，互不干扰**）。
+2. 首次打开会自动扫描模型目录 —— 程序目录下的 `models\`（设置里可改成任意目录，支持多个附加目录）
+   （GGUF 放在主目录或附加目录下都会被扫到，子目录也认）。
 3. 「模型库」里挑一个 → 点 **加载**；或者什么都不用做，等 agent 发请求时自动加载（设置里默认开着）。
    这就是**按需打开**：没人调用就不占显存，第一次请求时才把模型读进显卡；
    默认**空闲 10 分钟没人调用就自动卸载**、把显存还回去（设置 → 服务 → 空闲自动卸载，可改可关）。
@@ -50,7 +49,7 @@ API Key  : 程序里显示的那串 sk-chem-…（可以在设置里换）
 ```
 
 **不需要额外装任何东西**：CNM 自带推理引擎（`engine\llama\llama-server.exe`，Vulkan 版），
-**不依赖 Ollama / LM Studio / Python**。别的程序只要会说 OpenAI 协议（Base URL + key）就能连上，
+**不依赖 Ollama / Python / 任何别的推理框架**。别的程序只要会说 OpenAI 协议（Base URL + key）就能连上，
 模型文件（GGUF）也能在「在线浏览」里直接下 —— 所以它是「装上就能用」，不是「还得先搭个环境」。
 
 > **换台电脑**：把整个 `dist\CNM\` 文件夹拷过去（234 MB，`CNM.exe` 旁边那堆 `.dll` 和 `engine\` 都得带上，
@@ -96,7 +95,7 @@ API Key  : 程序里显示的那串 sk-chem-…（可以在设置里换）
 | OpenAI 兼容转发 | `/v1/models`、`/v1/chat/completions`（含 SSE 流式）、`/v1/completions`、`/v1/embeddings` 等，路径透传 |
 | 多模型热切换 | 请求里的 `model` 换一个，自动卸载旧的、加载新的（默认开） |
 | 局域网开放 | 监听 `0.0.0.0`，带 Bearer API Key 校验：**推理接口要 key**，**模型列表默认也要**（设置 → 服务 → 「模型列表也要 Key」可关）；只有 `/health` 和首页说明免 key（探活、监控用） |
-| 兼容前缀 | 除标准 `/v1/*`，也接受 `/api/v1/*`、以及 LM Studio 风格的 `/api/v0/models` —— 客户端 base URL 带不带 `/api` 都能直接用 |
+| 兼容前缀 | 除标准 `/v1/*`，也接受 `/api/v1/*`、以及 `/api/v0/models` 这类旧风格路径 —— 客户端 base URL 带不带 `/api` 都能直接用 |
 | 浏览器说明页 | 打开服务根路径给一页说明（Base URL、可用接口、curl 例子、key 在哪）；页签还有程序图标作 favicon |
 | 显存实测 | 用 Windows 性能计数器读引擎真正占的显存（和任务管理器同源），「哨兵」和 `/health` 都能看到 |
 | 探活 | `GET /health`（免 key）返回模型名 / 显存 MiB / 空闲秒数 / 自动卸载分钟数 / 引擎日志路径，方便接监控 |
@@ -174,10 +173,10 @@ llama-server.exe -m <模型.gguf> --host 127.0.0.1 --port <内部端口> -c 8192
 
 ```powershell
 # 看通不通、有哪些模型
-CNM.exe --upstream-test https://api.831800.xyz/v1 sk-xxx --proxy http://127.0.0.1:7890
+CNM.exe --upstream-test https://api.example.com/v1 sk-xxx --proxy http://127.0.0.1:7890
 
 # 真发一条对话，并把实际 URL / HTTP 状态 / 回应打出来
-CNM.exe --upstream-chat https://api.831800.xyz/v1 sk-xxx claude-sonnet-5-5-low --proxy http://127.0.0.1:7890
+CNM.exe --upstream-chat https://api.example.com/v1 sk-xxx claude-sonnet-5-5-low --proxy http://127.0.0.1:7890
 ```
 
 > 实测：不少中转站国内直连是超时的，填上本机代理就通（`--proxy auto` 可以让它自己试）；CNM 转发是**按块边收边发**的，`stream:true` 的 SSE 原样透传。
@@ -245,7 +244,7 @@ CNM.exe --install-engine cpu --engine-dir D:\CNM-engine
 - **只跑 GGUF**。safetensors / PyTorch 权重不在范围内（要转换得另上 llama.cpp 的 convert 工具 + Python 环境）。
 - 一次**只加载一个模型**（同一时刻一份显存占用），换模型会重启引擎进程。
 - 上下文、量化、模型能不能跑动，取决于显卡；本机 7900 XTX（24G）实测 27B-Q1_0 约 60 tok/s。
-- 模型目录里的文件是**只读复用**：CNM 只扫描、只新建（下载到 `<作者>\<仓库>\`），不会改动 LM Studio 已有的文件。
+- 模型目录里的文件是**只读复用**：CNM 只扫描、只新建（下载到 `<作者>\<仓库>\`），**不会改动目录里已有的任何文件**。
 - 防火墙：第一次监听局域网时 Windows 可能弹窗，点“允许”即可（或在防火墙里放行 1234 端口）。
 
 ## 从源码构建

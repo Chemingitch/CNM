@@ -107,6 +107,61 @@ public sealed class UpstreamHub
         return p;
     }
 
+    /// <summary>测速结果缓存：key = 上游名 + \0 + 模型名 → 首字延迟毫秒。
+    /// 放后端（不是前端内存）：刷新模型列表后自动重测，重画卡片也不丢，重启前一直有效。</summary>
+    private static readonly Dictionary<string, int> _pingCache = new(StringComparer.Ordinal);
+    private static readonly object _pingLock = new();
+
+    public static string PingKey(string up, string model) => up + "\0" + model;
+
+    public static Dictionary<string, int> PingSnapshot()
+    {
+        lock (_pingLock) return new Dictionary<string, int>(_pingCache, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// 拉完模型列表后，后台给所有模型测一遍速（并发 3，慢慢来）。
+    /// 目的是让用户一打开「外地模型」就能看到延迟，不用自己一个个点。
+    /// 只在列表变了才测，同一批不重复测。
+    /// </summary>
+    private void WarmUpPings(UpstreamCfg cfg, List<string> models)
+    {
+        if (models.Count == 0) return;
+        var need = new List<string>();
+        lock (_pingLock)
+            foreach (var m in models)
+                if (!_pingCache.ContainsKey(PingKey(cfg.Name, m))) need.Add(m);
+        if (need.Count == 0) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var gate = new SemaphoreSlim(3);
+                var tasks = need.Select(async m =>
+                {
+                    await gate.WaitAsync();
+                    try
+                    {
+                        var r = await PingModelAsync(cfg, m, CancellationToken.None);
+                        lock (_pingLock) _pingCache[PingKey(cfg.Name, m)] = r.ok ? r.firstMs : -1;
+                    }
+                    finally { gate.Release(); }
+                });
+                await Task.WhenAll(tasks);
+                Write($"[上游] {cfg.Name} 延迟测完（{need.Count} 个模型）");
+                PingUpdated?.Invoke();
+            }
+            catch { }
+        });
+    }
+
+    /// <summary>测速结果更新了（界面收到后重画外地模型卡片）</summary>
+    public event Action PingUpdated;
+
+    /// <summary>把缓存的测速结果读出来给界面用（-1 = 测过但失败）</summary>
+    public void PushPingsToUi() => PingUpdated?.Invoke();
+
     private static HttpClient CreateClient(string proxy)
     {
         var p = NormalizeProxy(proxy);
@@ -201,8 +256,9 @@ public sealed class UpstreamHub
     }
 
     /// <summary>
-    /// 自动检测：并发把「直连 / 系统代理 / 本机常见端口」都试一遍，谁先通就用谁。
-    /// 这就是回答“这个站是不是必须走代理”——不用人猜，机器试。
+    /// 自动检测：先单独试「直连」——能直连就用直连（最快、最稳，也不依赖用户代理软件开着）；
+    /// 直连不通才并发试「系统代理 / 本机常见端口」，谁先通就用谁。
+    /// 以前所有候选并发抢答，谁先回算谁，经常把「系统代理」写进配置，用户以为那是残留的旧值。
     /// </summary>
     public async Task<(bool ok, string proxy, string root, List<string> models, string error, string detail)> DetectProxyAsync(
         UpstreamCfg cfg, CancellationToken ct)
@@ -210,11 +266,25 @@ public sealed class UpstreamHub
         var root = Clean(cfg.BaseUrl);
         if (root.Length == 0) return (false, "", "", new List<string>(), "地址是空的", "");
 
-        var proxies = AutoProxies();
-        var notes = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
-        var win = new TaskCompletionSource<(bool ok, string proxy, string root, List<string> models)>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(40));      // 全部候选的总上限
+
+        // 第一步：只试直连（8 秒）。通了就直接定案，不再碰代理候选。
+        try
+        {
+            var sw0 = Stopwatch.StartNew();
+            var (dok, droot, dmodels, derr) = await TryModelsAsync(cfg, root, "", 8, cts.Token);
+            if (dok) return (true, "", droot, dmodels, "", $"直连 ✓ {sw0.Elapsed.TotalSeconds:0.0}s · {dmodels.Count} 个模型");
+            if (derr.Length > 0) { /* 记下失败原因，最后兜底提示用 */ }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { }
+
+        // 第二步：直连不行，才并发试系统代理 / 本机端口（直连已经从候选里剔除，别重复试）
+        var proxies = AutoProxies().Where(p => p.Length > 0).ToList();
+        var notes = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        var win = new TaskCompletionSource<(bool ok, string proxy, string root, List<string> models)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        notes["直连"] = "直连 ✗ 不通";
 
         foreach (var raw in proxies)
         {
@@ -242,7 +312,9 @@ public sealed class UpstreamHub
         bool okDone = done == win.Task && win.Task.IsCompletedSuccessfully && win.Task.Result.ok;
         try { cts.Cancel(); } catch { }
 
-        var detail = string.Join(" ｜ ", proxies.Select(p => notes.TryGetValue(Label(p), out var n) ? n : null)
+        // 详情里把「直连」也带上：用户最想知道的就是「直连到底行不行」
+        var detail = string.Join(" ｜ ", new[] { "直连" }.Concat(proxies.Select(Label))
+                                                .Select(l => notes.TryGetValue(l, out var n) ? n : null)
                                                 .Where(x => x != null)
                                                 .Distinct());
         if (okDone)
@@ -303,6 +375,7 @@ public sealed class UpstreamHub
         }
 
         lock (_cache) _cache[cfg.Name] = info;
+        if (info.Ok) WarmUpPings(cfg, info.Models);      // 后台测延迟，界面一打开就有数
         return info;
     }
 
@@ -418,8 +491,9 @@ public sealed class UpstreamHub
 
         var use = (model ?? "").Trim();
         if (use.Length == 0) use = (_s.UpstreamModel ?? "").Trim();
+        if (use.Length == 0) use = Peek(cfg.Name)?.Models.FirstOrDefault() ?? "";
         if (use.Length == 0)
-            use = Peek(cfg.Name)?.Models.FirstOrDefault() ?? "gpt-4o-mini";
+            return (false, "还不知道这条上游有哪些模型 —— 先点「测试」或「自动检测」把模型列表拉回来，或指定一条兜底模型名");
 
         var body = new JsonObject
         {
@@ -442,6 +516,72 @@ public sealed class UpstreamHub
             return (ok, detail + "\n（自动检测：" + d.detail + "）");
         }
         return (ok, detail);
+    }
+
+    /// <summary>
+    /// 给单个模型测速：真发一次最小流式请求，量到「首字延迟」为止（agent 场景最关心这个）。
+    /// 返回 (ok, 首字毫秒, 总毫秒, 错误)。超时 15 秒 —— 超过这个数对选模型已经没意义了。
+    /// </summary>
+    public async Task<(bool ok, int firstMs, int totalMs, string error)> PingModelAsync(
+        UpstreamCfg cfg, string model, CancellationToken ct)
+    {
+        var url = BuildUrl(cfg, "/chat/completions");
+        if (url.Length == 0) return (false, 0, 0, "上游地址是空的");
+        var use = (model ?? "").Trim();
+        if (use.Length == 0) return (false, 0, 0, "没给模型名");
+
+        var body = new JsonObject
+        {
+            ["model"] = use,
+            ["messages"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = "hi" }),
+            ["max_tokens"] = 1,
+            ["stream"] = true
+        }.ToJsonString();
+
+        var proxy = ResolveProxy(cfg);
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+            var content = new ByteArrayContent(Encoding.UTF8.GetBytes(body));
+            content.Headers.TryAddWithoutValidation("Content-Type", "application/json");
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+            Auth(req, cfg);
+
+            using var res = await GetClient(proxy).SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            var headMs = (int)sw.ElapsedMilliseconds;                      // 响应头到达 = 网络 + 排队
+            if ((int)res.StatusCode >= 400)
+            {
+                sw.Stop();
+                return (false, headMs, headMs, $"HTTP {(int)res.StatusCode}");
+            }
+
+            using var src = await res.Content.ReadAsStreamAsync(cts.Token);
+            var buf = new byte[4096];
+            int firstMs = -1;
+            while (true)
+            {
+                int n = await src.ReadAsync(buf, 0, buf.Length, cts.Token);
+                if (n <= 0) break;
+                if (firstMs < 0) firstMs = (int)sw.ElapsedMilliseconds;     // 第一个字节 = 首字延迟
+                // 只要拿到第一个数据块就够了，剩下的不读了（省上游额度）
+                break;
+            }
+            sw.Stop();
+            if (firstMs < 0) return (false, headMs, (int)sw.ElapsedMilliseconds, "上游没回数据");
+            return (true, firstMs, (int)sw.ElapsedMilliseconds, "");
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            sw.Stop();
+            return (false, 0, (int)sw.ElapsedMilliseconds, "15 秒没回应");
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return (false, 0, (int)sw.ElapsedMilliseconds, Brief(ex.Message));
+        }
     }
 
     private async Task<(bool ok, string detail)> PostOnceAsync(UpstreamCfg cfg, string url, string body, string proxy, CancellationToken ct)
@@ -489,7 +629,15 @@ public sealed class UpstreamHub
         var proxy = ResolveProxy(cfg);
         var r = await ForwardOnceAsync(cfg, url, body, client, ct, proxy);
 
-        // 自动模式：这条路没通（连头都没发出去）→ 现场探一遍再发，用户什么都不用配
+        // 连接池里可能躺着对端已经关掉的连接（中转站常 60 秒空闲就断）——
+        // 这种情况下一个字节都没发出去，换条新连接原地重试一次，别把抖动直接抛给客户端。
+        if (r.Retryable && !ct.IsCancellationRequested)
+        {
+            Write($"[上游] {cfg.Name} 第一次没发出去（{Brief(r.Error)}），换新连接重试一次…");
+            r = await ForwardOnceAsync(cfg, url, body, client, ct, proxy, forceNewConnection: true);
+        }
+
+        // 自动模式：这条路还没通（连头都没发出去）→ 现场探一遍再发，用户什么都不用配
         if (r.Retryable && IsAuto(cfg.Proxy))
         {
             Write($"[上游] {cfg.Name} 用 {Label(proxy)} 没连上，自动检测中…");
@@ -518,7 +666,8 @@ public sealed class UpstreamHub
     }
 
     private async Task<OneShot> ForwardOnceAsync(UpstreamCfg cfg, string url, byte[] body,
-                                                 NetworkStream client, CancellationToken ct, string proxy)
+                                                 NetworkStream client, CancellationToken ct, string proxy,
+                                                 bool forceNewConnection = false)
     {
         var one = new OneShot();
         HttpRequestMessage req = null;
@@ -527,6 +676,7 @@ public sealed class UpstreamHub
             var content = new ByteArrayContent(body);
             content.Headers.TryAddWithoutValidation("Content-Type", "application/json");
             req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+            if (forceNewConnection) req.Headers.ConnectionClose = true;   // 别复用可能已死的连接
             Auth(req, cfg);
 
             using var res = await GetClient(proxy).SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -556,18 +706,78 @@ public sealed class UpstreamHub
             using var src = await res.Content.ReadAsStreamAsync(ct);
             var buf = new byte[32 * 1024];
             var crlf = new byte[] { 13, 10 };
+
+            // 卡住检测：上游「不发也不关」（中转站排队/被限流）时，别傻等到 30 分钟超时。
+            // 90 秒一个字节都没有 = 这条流已经废了，主动掐断并报错。
+            long lastByteTick = Environment.TickCount64;
+            bool upstreamBroke = false, clientGone = false;
+            string brokeMsg = "";
+            using var stall = new CancellationTokenSource();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, stall.Token);
+            var wt = linked.Token;
+            var watchdog = Task.Run(async () =>
+            {
+                while (!linked.IsCancellationRequested)
+                {
+                    try { await Task.Delay(5000, linked.Token); } catch { return; }
+                    if (Environment.TickCount64 - Interlocked.Read(ref lastByteTick) > 90_000)
+                    {
+                        try { stall.Cancel(); } catch { }
+                        return;
+                    }
+                }
+            });
+
             while (true)
             {
                 int n;
-                try { n = await src.ReadAsync(buf, 0, buf.Length, ct); } catch { break; }
-                if (n <= 0) break;
+                try { n = await src.ReadAsync(buf, 0, buf.Length, wt); }
+                catch (OperationCanceledException) when (stall.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    upstreamBroke = true;
+                    brokeMsg = "上游 90 秒没有任何数据（中转站把连接吊住了）";
+                    break;
+                }
+                catch (OperationCanceledException) { throw; }          // 客户端自己取消：交给外层
+                catch (Exception ex) { upstreamBroke = true; brokeMsg = Brief(ex.Message); break; }
+
+                if (n <= 0) break;                                     // 上游正常结束
+                Interlocked.Exchange(ref lastByteTick, Environment.TickCount64);
                 tail.Add(buf, n);
-                await client.WriteAsync(Encoding.ASCII.GetBytes(n.ToString("x") + "\r\n"), ct);
-                await client.WriteAsync(buf.AsMemory(0, n), ct);
-                await client.WriteAsync(crlf, ct);
-                await client.FlushAsync(ct);
+
+                try
+                {
+                    await client.WriteAsync(Encoding.ASCII.GetBytes(n.ToString("x") + "\r\n"), ct);
+                    await client.WriteAsync(buf.AsMemory(0, n), ct);
+                    await client.WriteAsync(crlf, ct);
+                    await client.FlushAsync(ct);
+                }
+                catch { clientGone = true; break; }                    // 客户端（agent）先走了
                 outBytes += n;
             }
+
+            // 客户端断开：直接收工，不发终止块（发了也没人收）
+            if (clientGone)
+            {
+                one.Status = 499;
+                one.Error = "客户端断开";
+                one.Bytes = outBytes;
+                Write($"[上游] {cfg.Name} 客户端已断开，停止转发（已转 {FmtBytes(outBytes)}）");
+                return one;
+            }
+
+            // 上游断了：不能写终止块！否则客户端会把「截断」当成「正常回答结束」——
+            // 表现就是答案说到一半突然没了，而且不报错。不写终止块 = 客户端读到传输中断，
+            // 会按错误处理（重试 / 提示），比静默截断好一万倍。
+            if (upstreamBroke)
+            {
+                one.Status = 499;
+                one.Error = brokeMsg;
+                one.Bytes = outBytes;
+                Write($"[上游] {cfg.Name} 流中断：{brokeMsg}（已转 {FmtBytes(outBytes)}；主动断开客户端，避免把截断当正常结束）");
+                return one;
+            }
+
             await client.WriteAsync(Encoding.ASCII.GetBytes("0\r\n\r\n"), ct);
             await client.FlushAsync(ct);
 
@@ -588,6 +798,7 @@ public sealed class UpstreamHub
         finally { try { req?.Dispose(); } catch { } }
     }
 
+    private static string FmtBytes(long n) => n >= 1024 ? (n / 1024) + " KB" : n + " B";
     private static async Task<(int, long)> FailAsync(NetworkStream client, string msg, CancellationToken ct)
     {
         try

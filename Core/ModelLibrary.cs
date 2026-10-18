@@ -29,7 +29,7 @@ public sealed class ModelEntry
         : (SizeBytes / 1048576.0).ToString("0") + " MB";
 }
 
-/// <summary>扫描模型目录（LM Studio 布局），带元数据缓存</summary>
+/// <summary>扫描模型目录（&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf 这种常见布局），带元数据缓存</summary>
 public sealed class ModelLibrary
 {
     private readonly Settings _settings;

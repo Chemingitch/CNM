@@ -159,7 +159,7 @@ public sealed class OpenAiRouter
                 string path = target.Split('?')[0];
                 log.Path = path;
 
-                // 有些客户端把 base URL 配成 …/api/v1，或者按 LM Studio 的习惯来要 /api/v0/models。
+                // 有些客户端把 base URL 配成 …/api/v1，或者按旧习惯来要 /api/v0/models。
                 // 统一把开头这段 /api 折掉再走后面的路由 —— 它们就不会一直 404 了（日志里仍记原始路径）。
                 if ((path.StartsWith("/api/v1", StringComparison.OrdinalIgnoreCase) ||
                      path.StartsWith("/api/v0", StringComparison.OrdinalIgnoreCase)) && path.Length > 4)

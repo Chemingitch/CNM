@@ -41,6 +41,14 @@ public sealed class App
         Engine.Crashed += msg => Toast?.Invoke("error", msg);
         Router.Log += line => Push(new JsonObject { ["type"] = "log", ["source"] = "router", ["line"] = line });
         Router.Upstreams.Log += line => Push(new JsonObject { ["type"] = "log", ["source"] = "upstream", ["line"] = line });
+        // 后台延迟测完 → 通知界面重画外地模型卡片（模型名 → 首字毫秒，-1 = 测过但失败）
+        Router.Upstreams.PingUpdated += () =>
+            Push(new JsonObject
+            {
+                ["type"] = "pings",
+                ["pings"] = System.Text.Json.Nodes.JsonNode.Parse(
+                    System.Text.Json.JsonSerializer.Serialize(UpstreamHub.PingSnapshot()))
+            });
         Router.StateChanged += () => PushStateThrottled();      // 高频（每个请求开始/结束）→ 合并
         Router.RequestLogged += l =>
         {
@@ -202,6 +210,8 @@ public sealed class App
             ["scanning"] = Scanning,
             ["ips"] = IpList(),
             ["usage"] = Router.Usage.Json(),
+            ["pings"] = System.Text.Json.Nodes.JsonNode.Parse(
+                System.Text.Json.JsonSerializer.Serialize(UpstreamHub.PingSnapshot())),
             // reqLog 有增量推送（type:"req"），全量列表只在前端主动调 state 时给：
             // 节流后的每次状态推送不用再拖着 300 条请求记录重建/序列化。
             ["reqLog"] = null
@@ -358,7 +368,7 @@ public sealed class App
                 return FullStateJson();
 
             case "scan":
-                return await Task.Run(() => { Scan(); return ModelsJson(); });
+                return await Task.Run(() => { Scan(); PushState(); return ModelsJson(); });
 
             case "models":
                 return ModelsJson();
@@ -435,7 +445,8 @@ public sealed class App
                 return new JsonObject
                 {
                     ["ok"] = true,
-                    ["variant"] = v,
+                    ["variant"] = v,                                    // 用户在「要装哪个」里选的
+                    ["installed"] = Engine.InstalledVariant,            // 本机实际装的（看目录里的 dll）
                     ["tag"] = l.tag,
                     ["name"] = l.name,
                     ["sizeMiB"] = Math.Round(l.size / 1048576.0),
@@ -516,6 +527,74 @@ public sealed class App
                 await Router.Upstreams.RefreshAllAsync(CancellationToken.None);
                 PushState();
                 return SettingsJson();
+            }
+
+            case "pingModel":
+            {
+                // 给单个外地模型测速：真发一次最小流式请求，量首字延迟（agent 最关心的那个数）
+                var upName = (msg["upstream"]?.ToString() ?? "").Trim();
+                var model = (msg["model"]?.ToString() ?? "").Trim();
+                var cfg = Settings.Upstreams.FirstOrDefault(u =>
+                    string.Equals(u.Name, upName, StringComparison.OrdinalIgnoreCase));
+                if (cfg == null)
+                {
+                    // 名字对不上就用界面正在编辑的那张卡（还没保存也能测）
+                    cfg = new UpstreamCfg
+                    {
+                        Name = upName.Length > 0 ? upName : "临时",
+                        BaseUrl = msg["baseUrl"]?.ToString() ?? "",
+                        ApiKey = msg["apiKey"]?.ToString() ?? "",
+                        Proxy = (msg["proxy"]?.ToString() ?? "").Trim(),
+                        Enabled = true
+                    };
+                }
+                var pr = await Router.Upstreams.PingModelAsync(cfg, model, CancellationToken.None);
+                return new JsonObject
+                {
+                    ["ok"] = pr.ok,
+                    ["firstMs"] = pr.firstMs,
+                    ["totalMs"] = pr.totalMs,
+                    ["error"] = pr.error,
+                    ["upstream"] = cfg.Name,
+                    ["model"] = model
+                };
+            }
+
+            case "pingAllUpstreamModels":
+            {
+                // 一条上游的所有模型并发测速（并发 4，别把中转站打崩）
+                var upName2 = (msg["upstream"]?.ToString() ?? "").Trim();
+                var cfg2 = Settings.Upstreams.FirstOrDefault(u =>
+                    string.Equals(u.Name, upName2, StringComparison.OrdinalIgnoreCase));
+                if (cfg2 == null) return Err("找不到上游 " + upName2);
+                var models = Router.Upstreams.Peek(upName2)?.Models ?? new List<string>();
+                if (models.Count == 0) return Err("这条上游还没报出模型，先点「重新连接」");
+
+                var results = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
+                var errors = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+                using (var gate = new SemaphoreSlim(4))
+                {
+                    var tasks = models.Select(async m =>
+                    {
+                        await gate.WaitAsync();
+                        try
+                        {
+                            var r = await Router.Upstreams.PingModelAsync(cfg2, m, CancellationToken.None);
+                            if (r.ok) results[m] = r.firstMs; else errors[m] = r.error;
+                        }
+                        finally { gate.Release(); }
+                    });
+                    await Task.WhenAll(tasks);
+                }
+                var arr = new JsonArray();
+                foreach (var m in models)
+                {
+                    var o = new JsonObject { ["model"] = m };
+                    if (results.TryGetValue(m, out var ms)) { o["ok"] = true; o["firstMs"] = ms; }
+                    else { o["ok"] = false; o["error"] = errors.TryGetValue(m, out var e) ? e : "没结果"; }
+                    arr.Add(o);
+                }
+                return new JsonObject { ["ok"] = true, ["upstream"] = upName2, ["results"] = arr };
             }
 
             case "testUpstreamChat":
@@ -748,6 +827,33 @@ public sealed class App
                     return new JsonObject { ["ok"] = true, ["path"] = p };
                 }
                 catch (Exception ex) { return Err(ex.Message); }
+            }
+
+            case "clearLog":
+            {
+                // 「清空」按钮：光清界面没用 —— 日志还在往文件里追加，重启就全回来了。
+                // cnm.log 是我们自己写的，直接截断；engine.log 是 llama-server 那个进程持有的，
+                // 它可能锁着文件，截断失败不算错（引擎没跑的时候就能清掉）。
+                var cleared = new List<string>();
+                var failed = new List<string>();
+                foreach (var f in new[] { AppLogPath, Engine.LogPath })
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(f) ?? Settings.LogsDir);
+                        File.WriteAllText(f, "", new System.Text.UTF8Encoding(false));
+                        cleared.Add(Path.GetFileName(f));
+                        if (f == AppLogPath) Interlocked.Exchange(ref _appLogLines, 0);
+                    }
+                    catch { failed.Add(Path.GetFileName(f)); }
+                }
+                Push(new JsonObject { ["type"] = "log", ["source"] = "cnm", ["line"] = "日志已清空：" + string.Join("、", cleared) }); 
+                return new JsonObject
+                {
+                    ["ok"] = failed.Count == 0,
+                    ["cleared"] = string.Join("、", cleared),
+                    ["message"] = failed.Count > 0 ? "这几个文件被占用没清掉：" + string.Join("、", failed) : ""
+                };
             }
 
             case "copy":

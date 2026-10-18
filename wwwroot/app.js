@@ -32,6 +32,7 @@ const S = {
   upShown: null,
   dirty: false,
   loadingModel: null        // 正在加载的模型 id（防重入：加载中再点「加载」直接拒绝）
+  , pings: {}               // 外地模型测速结果：key=上游\0模型，值={ok,firstMs,totalMs,error}
 };
 
 /* ---------------- 通信 ---------------- */
@@ -67,6 +68,10 @@ if (window.chrome && window.chrome.webview) window.chrome.webview.addEventListen
       break;
     }
     case 'state': onState(m.state); break;
+    case 'pings':
+      S.pings = m.pings || {};
+      if (S.mtab === 'remote') renderRemote();
+      break;
     case 'models': S.models = m.models || []; renderModels(); break;
     case 'downloads': S.jobs = m.jobs || []; renderJobs(); break;
     case 'log': addLog(m.source, m.line); break;
@@ -87,6 +92,45 @@ const fmtSize = (b) => {
   return (b / 1024).toFixed(0) + ' KB';
 };
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** 延迟显示：1000ms 以下显示 ms，以上显示秒（1.2s 比 1200ms 好读） */
+const fmtMs = (ms) => { const n = +ms || 0; return n < 1000 ? n + ' ms' : (n / 1000).toFixed(1) + ' s'; };
+
+/**
+ * 测速结果由后端缓存并推送（key = "上游\0模型" → 首字毫秒，-1 = 测过但失败）。
+ * 放后端而不是前端内存：拉完模型列表后端会自动测一遍，刷新/重画都不会丢。
+ */
+function pingOf(up, model) {
+  const v = (S.pings || {})[up + '\u0000' + model];
+  if (v == null) return null;
+  return v < 0 ? { ok: false, error: '测速失败' } : { ok: true, firstMs: v };
+}
+const pingMs = (up, model) => { const p = pingOf(up, model); return p && p.ok ? p.firstMs : 999999; };
+
+/** 模型源的主机名，给提示文字用（别再写死 hf-mirror.com —— 用户可以在设置里改） */
+function hfHost() {
+  const u = (S.settings && S.settings.hfEndpoint) || ($('#setHf') && $('#setHf').value) || 'https://hf-mirror.com';
+  try { return new URL(u).host || 'hf-mirror.com'; } catch (e) { return String(u).replace(/^https?:\/\//, '').split('/')[0] || 'hf-mirror.com'; }
+}
+
+/** 新建上游时预填的默认值：优先界面上最后一张有地址的卡，其次已保存的配置 */
+function lastUpstreamDefaults() {
+  let baseUrl = '', proxy = 'auto';
+  const rows = $$('#upList .up-card').filter((r) => r.querySelector('.up-url').value.trim());
+  if (rows.length) {
+    const last = rows[rows.length - 1];
+    baseUrl = last.querySelector('.up-url').value.trim();
+    proxy = last.querySelector('.up-proxy').value.trim() || 'auto';
+    return { baseUrl, proxy };
+  }
+  const saved = ((S.settings && S.settings.upstreams) || []).filter((u) => (u.baseUrl || '').trim());
+  if (saved.length) {
+    const u = saved[saved.length - 1];
+    baseUrl = u.baseUrl.trim();
+    proxy = (u.proxy || '').trim() || 'auto';
+  }
+  return { baseUrl, proxy };
+}
 const fmtNum = (n) => {
   n = +n || 0;
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -157,6 +201,7 @@ function onState(st) {
   S.scanning = !!st.scanning;
   if (st.reqLog) { S.reqs = st.reqLog; renderReqs(); if (S.mtab === 'remote') renderRemote(); }
   if (st.usage) { S.usage = st.usage; renderUsage(); }
+  if (st.pings) S.pings = st.pings;
 
   const eng = S.engine, svc = S.service;
   const vram = eng.vramMiB ? ' · 显存 ≈ ' + (eng.vramMiB / 1024).toFixed(1) + ' GB' : '';
@@ -344,19 +389,35 @@ function upRow(u) {
   row.querySelector('.up-detect').addEventListener('click', async () => {
     const cfg = cfgOf();
     if (!cfg.baseUrl) { toast('先填地址', 'error'); return; }
-    info.textContent = '自动检测中：直连 / 系统代理 / 本机常见端口 一起试…';
+    info.textContent = '自动检测中：先试直连，不行再试系统代理 / 本机常见端口…';
+    const btn = row.querySelector('.up-detect');
+    btn.disabled = true;
     try {
       const r = await call('detectUpstreamProxy', { name: cfg.name, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey });
       if (r && r.ok) {
+        // 检测通过 = 这条路真的能用：把代理写回、把这条上游打开、并且立刻落盘。
+        // 以前只写进输入框、不保存也不启用，于是「界面显示开着，配置里其实是关的」。
         row.querySelector('.up-proxy').value = r.proxy || 'direct';
-        S.upDirty = true;
+        const on = row.querySelector('.up-on');
+        const wasOn = on.checked;
+        on.checked = true;
         info.textContent = '通了：' + r.count + ' 个模型 · 走 ' + (r.proxy || '直连') + '　' + (r.detail || '');
-        toast('这个站' + (r.proxy ? '要走 ' + r.proxy : '直连就行') + '，已填进代理那格（记得点「保存上游」）', 'ok');
+        try {
+          const s = await call('saveUpstreams', { upstreams: collectUpstreams() });
+          S.upDirty = false;
+          S.upShown = null;
+          if (s) renderWatch({ settings: s });
+          toast('这个站' + (r.proxy ? '要走 ' + r.proxy : '直连就行') + '，已自动启用并保存' + (wasOn ? '' : '（原来没启用）'), 'ok');
+        } catch (e2) {
+          S.upDirty = true;
+          toast('检测通过，但保存失败：' + e2.message + '（请点「保存上游」）', 'error');
+        }
       } else {
         info.textContent = '都不通：' + ((r && r.error) || '') + '　' + ((r && r.detail) || '');
         toast('直连 / 系统代理 / 本机常见端口 都没通，检查地址和 Key', 'error');
       }
     } catch (e) { info.textContent = '检测失败：' + e.message; toast(e.message, 'error'); }
+    finally { btn.disabled = false; }
   });
 
   row.querySelector('.up-test').addEventListener('click', async () => {
@@ -623,7 +684,12 @@ function renderUsage() {
   const totals = $('#usageTotals');
   if (!box || !totals) return;
   const u = S.usage;
-  if (!u) { totals.textContent = '—'; box.innerHTML = ''; return; }
+  if (!u) {
+    totals.textContent = '—';
+    box.innerHTML = '';
+    renderUsageGlance({}, [], '今天');      // 没数据也要把折叠态刷成「—」，别留着上次的旧数字
+    return;
+  }
 
   const tab = S.utab || 'day';
   const pair = { day: ['today', 'days'], month: ['month', 'months'], year: ['year', 'years'] }[tab];
@@ -666,6 +732,54 @@ function renderUsage() {
     ((((tt.pt || 0) + (tt.ct || 0)) > 0) ? ' · token 输入 ' + fmtNum(tt.pt) + ' / 输出 ' + fmtNum(tt.ct) : '') +
     ' · 回传 ' + fmtBytes(tt.bytes) +
     '　｜　只算 chat/completions 这类真干活的请求（模型列表、探活不算），数字存在 %APPDATA%\\CNM\\usage.json；柱子颜色：下=本地、上=外地。';
+
+  renderUsageGlance(t, series, name);
+}
+
+/** 折叠态仪表盘：一行关键数字 + 右侧迷你火花线（点任意处展开） */
+function renderUsageGlance(t, series, name) {
+  const set = (id, v) => { const e = $('#' + id); if (e) e.textContent = v; };
+  set('ugReq', fmtNum(t.req));
+  const lab = $('#ugReqLab'); if (lab) lab.textContent = '次调用（' + (name || '今天') + '）';
+  set('ugLocal', fmtNum(t.local));
+  set('ugUp', fmtNum(t.up));
+  const failBox = $('#ugFailBox');
+  if (failBox) {
+    const f = t.fail || 0;
+    failBox.style.display = f > 0 ? '' : 'none';
+    if (f > 0) set('ugFail', fmtNum(f));
+  }
+  const tok = (t.pt || 0) + (t.ct || 0);
+  set('ugTok', tok > 0 ? fmtNum(tok) : '—');
+  set('ugAvg', t.req ? fmtDur((t.ms || 0) / t.req) : '—');
+
+  // 火花线：近 48 根，按最大值归一；没请求的那天给 2px 基线
+  const spark = $('#ugSpark');
+  if (spark) {
+    const arr = (series || []).slice(-48);
+    const mx = Math.max(1, ...arr.map((d) => +d.req || 0));
+    spark.innerHTML = arr.map((d) => {
+      const req = +d.req || 0;
+      const h = req ? Math.max(8, Math.round((req / mx) * 100)) : 0;
+      const title = d.k + '：' + req + ' 次（本地 ' + (+d.local || 0) + ' / 外地 ' + (+d.up || 0) + '）';
+      return '<div class="ug-b' + (req ? '' : ' zero') + '" style="height:' + (req ? h + '%' : '2px') + '" title="' + esc(title) + '"></div>';
+    }).join('');
+  }
+}
+
+/** 折叠 / 展开用量仪表盘（状态记 localStorage，下次打开保持） */
+function setUsageExpanded(on) {
+  const p = $('#usagePanel');
+  if (!p) return;
+  p.classList.toggle('expanded', !!on);
+  p.classList.toggle('collapsed', !on);
+  const b = $('#btnUsageToggle');
+  if (b) b.textContent = on ? '收起 ▴' : '展开 ▾';
+  try { localStorage.setItem('cnm.usageExpanded', on ? '1' : '0'); } catch (e) { }
+}
+function toggleUsage() {
+  const p = $('#usagePanel');
+  if (p) setUsageExpanded(!p.classList.contains('expanded'));
 }
 
 /* ---------------- 模型库 → 外地模型（云端，来自守望者里的上游） ---------------- */
@@ -737,6 +851,7 @@ function renderRemote() {
   const sort = S.upSort || 'name';
   if (sort === 'lab') list.sort((a, b) => (labOf(a.m).name || '').localeCompare(labOf(b.m).name || '', 'zh') || String(a.m).localeCompare(String(b.m), 'zh'));
   else if (sort === 'recent') list.sort((a, b) => (b.recent ? 1 : 0) - (a.recent ? 1 : 0) || String(a.m).localeCompare(String(b.m), 'zh'));
+  else if (sort === 'speed') list.sort((a, b) => pingMs(a.up, a.m) - pingMs(b.up, b.m) || String(a.m).localeCompare(String(b.m), 'zh'));
   else list.sort((a, b) => String(a.m).localeCompare(String(b.m), 'zh'));
 
   const connected = ups.filter((u) => u.enabled !== false && (u.models || 0) > 0);
@@ -763,7 +878,14 @@ function renderRemote() {
   }
 
   box.innerHTML = list.map((r) => {
-    const on = act.up === r.up && act.model === r.m;    return `
+    const on = act.up === r.up && act.model === r.m;
+    const ping = pingOf(r.up, r.m);
+    const badge = ping
+      ? (ping.ok
+          ? `<span class="badge b5 ${ping.firstMs < 1000 ? '' : ping.firstMs < 3000 ? 'mid' : 'slow'}" title="首字延迟（实测发一次最小请求）">${fmtMs(ping.firstMs)}</span>`
+          : `<span class="badge" title="${esc(ping.error || '测速失败')}">测速失败</span>`)
+      : '';
+    return `
     <div class="card ${on ? 'loaded' : ''}">
       <div class="card-top">
         ${logoTile(r.m)}
@@ -775,12 +897,14 @@ function renderRemote() {
       <div class="badges">
         <span class="badge b2">云端</span>
         <span class="badge">${esc(r.up)}</span>
+        ${badge}
         ${r.recent ? '<span class="badge b4">用过</span>' : ''}
         ${on ? '<span class="badge b3">已接入</span>' : ''}
       </div>
       <div class="card-actions">
         <button class="btn tiny ${on ? '' : 'primary'}" data-use="${esc(r.up)}|${esc(r.m)}">${on ? '取消接入' : '接入'}</button>
         <button class="btn tiny" data-try="${esc(r.up)}|${esc(r.m)}">试一句</button>
+        <button class="btn tiny ghost" data-ping="${esc(r.up)}|${esc(r.m)}">测速</button>
         <button class="btn tiny ghost" data-copyname="${esc(r.m)}">复制名字</button>
       </div>
     </div>`;
@@ -796,6 +920,23 @@ function renderRemote() {
       renderRemote(); renderModels();
       toast(isOn ? '已取消接入（名字对不上就报错）' : '已接入 ' + p[1] + '：名字对不上的请求兜底用它（点名别的外地模型照样用它自己）', 'ok');
     } catch (e) { toast(e.message, 'error'); }
+  }));
+
+  box.querySelectorAll('[data-ping]').forEach((b) => b.addEventListener('click', async () => {
+    const p = b.dataset.ping.split('|');
+    const u = ups.find((x) => x.name === p[0]) || {};
+    b.disabled = true;
+    const old = b.textContent;
+    b.textContent = '测速中…';
+    try {
+      // 界面上正在编辑的地址/Key 优先（还没保存也能测）
+      const r = await call('pingModel', { upstream: p[0], model: p[1], baseUrl: u.baseUrl || '', apiKey: u.apiKey || '', proxy: u.proxy || '' });
+      setPing(p[0], p[1], r || { ok: false, error: '没结果' });
+      if (r && r.ok) toast(p[1] + '：首字 ' + r.firstMs + ' ms', 'ok');
+      else toast(p[1] + ' 测速失败：' + ((r && r.error) || '未知'), 'error');
+      renderRemote();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { b.disabled = false; b.textContent = old; }
   }));
 
   box.querySelectorAll('[data-try]').forEach((b) => b.addEventListener('click', async () => {
@@ -822,7 +963,7 @@ function renderHfResults(arr) {
   const cnt = $('#hfCount');
 
   if (!all.length) {
-    box.innerHTML = '<div class="empty">' + (S.hfSearched ? '没搜到，换个词试试' : '输入关键词搜索，源：hf-mirror.com（HF 国内镜像）') + '</div>';
+    box.innerHTML = '<div class="empty">' + (S.hfSearched ? '没搜到，换个词试试' : '输入关键词搜索，源：' + esc(hfHost()) + '（在「设置 → 模型源」可改）') + '</div>';
     if (cnt) cnt.textContent = '';
     return;
   }
@@ -1103,7 +1244,6 @@ function bind() {
   $('#btnMin')?.addEventListener('click', () => winCall('windowMinimize'));
   $('#btnMax')?.addEventListener('click', () => winCall('windowMaximize'));
   $('#btnClose')?.addEventListener('click', () => winCall('windowClose'));
-  $('#titlebarHit')?.addEventListener('click', () => { });
 
   $('#btnStart').addEventListener('click', async () => { const r = await call('startServer'); if (r && r.error) toast(r.error, 'error'); });
   $('#btnStop').addEventListener('click', () => call('stopServer'));
@@ -1176,13 +1316,31 @@ function bind() {
       } else toast('已加入下载队列', 'ok');
     } catch (e) { toast(e.message, 'error'); }
   });
-  $('#btnClearDl').addEventListener('click', () => call('clearDownloads'));
-  $('#btnClearLog').addEventListener('click', () => { logs.length = 0; $('#logBox').textContent = ''; });
+  $('#btnClearDl').addEventListener('click', async () => {
+    try { await call('clearDownloads'); toast('已清理完成的任务', 'ok'); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+  $('#btnClearLog').addEventListener('click', async () => {
+    logs.length = 0;
+    $('#logBox').textContent = '';
+    // 只清前端是不够的：日志还在往文件里写，重启/刷新就全回来了
+    try { await call('clearLog'); toast('日志已清空（界面 + cnm.log / engine.log）', 'ok'); }
+    catch (e) { toast('界面清了，但日志文件没清掉：' + e.message, 'error'); }
+  });
   $('#btnOpenLogFile').addEventListener('click', async () => {
     try { await call('openLogFile'); } catch (e) { toast(e.message, 'error'); }
   });
 
-  $('#btnNewKey').addEventListener('click', async () => { const r = await call('newKey'); if (r && r.apiKey) toast('新 Key 已生成，记得保存设置', 'ok'); });
+  $('#btnNewKey').addEventListener('click', async () => {
+    const r = await call('newKey');
+    if (r && r.apiKey) {
+      // 必须回填：后端已经立即生效了，但输入框还是旧 key ——
+      // 用户接着点「保存设置」就会把旧 key 写回去，等于白换一次。
+      $('#setKey').value = r.apiKey;
+      if (S.settings) S.settings.apiKey = r.apiKey;
+      toast('新 Key 已生成并立即生效（已回填，不用再保存）', 'ok');
+    }
+  });
   $$('[data-copy]').forEach((b) => b.addEventListener('click', () => copyText($('#' + b.dataset.copy).textContent)));
 
   // 「浏览器打开」：打开的是根路径（一页说明），不是 /v1（那是给程序的）
@@ -1191,7 +1349,11 @@ function bind() {
     if (base.startsWith('http')) call('openUrl', { url: base });
   });
 
-  $('#btnProbeEngine').addEventListener('click', async () => { await call('probeEngine'); toast('已重新检测引擎', 'ok'); });
+  $('#btnProbeEngine').addEventListener('click', async () => {
+    await call('probeEngine');
+    toast('已重新检测引擎', 'ok');
+    checkEngineUpdate();   // 顺带把「本机装的是哪个后端」也刷新 —— 换过后端这里才准
+  });
 
   // 认显卡：给「该装哪个后端」的建议并自动预选（用户自己改过就不动）
   (async () => {
@@ -1207,7 +1369,7 @@ function bind() {
       if (hint) hint.textContent = '没认出来（不影响使用，手动挑一个就行）';
     }
   })();
-  $('#engineVariant').addEventListener('change', () => { S.variantTouched = true; });
+  $('#engineVariant').addEventListener('change', () => { S.variantTouched = true; checkEngineUpdate(); });
   async function checkEngineUpdate() {
     const v = $('#engineVariant').value;
     const out = $('#engineLatest');
@@ -1219,11 +1381,24 @@ function bind() {
       const cur = String(r.current || '').match(/\d{3,}/);
       const lat = String(r.tag || '').match(/\d{3,}/);
       const curN = cur ? Number(cur[0]) : 0, latN = lat ? Number(lat[0]) : 0;
-      let tail = '';
-      if (!curN) tail = ' —— 本机还没装这个后端，点「下载并安装引擎」就装最新的';
-      else if (latN && curN >= latN) tail = ' —— 已经是最新';
-      else if (latN) tail = ' —— 有新版，点「下载并安装引擎」会装成 ' + r.tag;
-      out.textContent = '官方最新 ' + r.tag + '（' + v + ' 包约 ' + Math.round(r.sizeMiB) + ' MB）；本机 ' + (r.current || '未检测到') + tail;
+      const inst = String(r.installed || '').trim();          // 本机实际装的后端
+      const instName = { vulkan: 'Vulkan', rocm: 'ROCm', cuda: 'CUDA', cpu: 'CPU', generic: '通用', unknown: '' }[inst] || inst;
+
+      const parts = [];
+      parts.push('官方最新 ' + r.tag + '（' + v + ' 包约 ' + Math.round(r.sizeMiB) + ' MB）');
+      // 「本机」说的是实际装的那个后端，不是下拉里选的 —— 两者可以不一样
+      parts.push(instName
+        ? '本机装的是 ' + instName + (r.current ? '（' + r.current + '）' : '')
+        : (r.current ? '本机 ' + r.current : '本机还没装'));
+
+      if (!curN) parts.push('点「下载并安装引擎」装上');
+      else if (latN && curN >= latN) parts.push('已是最新');
+      else if (latN) parts.push('有新版，点「下载并安装引擎」会装成 ' + r.tag);
+      // 选了 A 但装的是 B：明确提醒，别让人以为已经换了
+      if (inst && inst !== 'unknown' && inst !== v) {
+        parts.push('⚠ 你选的是 ' + v + '，但本机装的是 ' + instName + ' —— 要换后端请点「下载并安装引擎」');
+      }
+      out.textContent = parts.join('；');
     } catch (e) { out.textContent = e.message; }
   }
   $('#btnEngineUpdate').addEventListener('click', () => checkEngineUpdate());
@@ -1257,10 +1432,15 @@ function bind() {
   // ---- 守望者（云端上游）----
   $('#btnAddUp').addEventListener('click', () => {
     const n = $$('#upList .up-card').length + 1;
-    if ($('#upList .empty')) $('#upList').innerHTML = '';
-    $('#upList').appendChild(upRow({ name: 'up' + n, baseUrl: '', apiKey: '', proxy: 'auto', enabled: true }));
+    if ($('#upList').querySelector('.empty')) $('#upList').innerHTML = '';
+    // 预填「上次用过的地址 + 代理」：新建一条不用再把中转站地址粘一遍。
+    // 优先取界面上最后一张有地址的卡，其次取已保存的配置。
+    const last = lastUpstreamDefaults();
+    $('#upList').appendChild(upRow({ name: 'up' + n, baseUrl: last.baseUrl, apiKey: '', proxy: last.proxy, enabled: true }));
     S.upDirty = true;
-    toast('填完地址和 Key，点「保存上游」（代理那格默认 auto = 自动检测要不要走代理）', 'info');
+    toast(last.baseUrl
+      ? '已带上上次的地址（' + last.baseUrl + '），填 Key 后点「保存上游」'
+      : '填完地址和 Key，点「保存上游」（代理那格默认 auto = 自动检测要不要走代理）', 'info');
   });
   $('#btnSaveUp').addEventListener('click', async () => {
     try {
@@ -1285,6 +1465,36 @@ function bind() {
   $$('.modelTabs .seg-btn').forEach((b) => b.addEventListener('click', () => setModelTab(b.dataset.mtab)));
   setModelTab(S.mtab);   // 开局把按钮态和工具条对齐（本地条 / 外地条两套）
   $$('#usageTabs .seg-btn').forEach((b) => b.addEventListener('click', () => setUsageTab(b.dataset.utab)));
+
+  /* 用量仪表盘：折叠态默认，点标题/数字区/按钮都能切换 */
+  $('#btnUsageToggle').addEventListener('click', (e) => { e.stopPropagation(); toggleUsage(); });
+  $('#usageHead').addEventListener('click', (e) => {
+    if (e.target.closest('#usageTabs') || e.target.closest('#btnUsageToggle')) return;  // 点分页按钮别折叠
+    toggleUsage();
+  });
+  $('#usageGlance').addEventListener('click', () => toggleUsage());
+  $('#btnPingAll').addEventListener('click', async () => {
+    const ups = (S.settings && S.settings.upstreams) || [];
+    const withModels = ups.filter((u) => u.enabled !== false && (u.models || 0) > 0);
+    if (!withModels.length) { toast('还没有连上的上游（点「重新连接」拉一次模型列表）', 'error'); return; }
+    const btn = $('#btnPingAll');
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = '测速中…';
+    let done = 0, total = 0;
+    try {
+      for (const u of withModels) {
+        total += (u.models || 0);
+        const r = await call('pingAllUpstreamModels', { upstream: u.name });
+        if (r && r.results) {
+          r.results.forEach((x) => { setPing(u.name, x.model, x); if (x.ok) done++; });
+        }
+      }
+      renderRemote();
+      toast('测速完成：' + done + '/' + total + ' 个模型有结果（下拉选「按速度」排序挑最快的）', done > 0 ? 'ok' : 'error');
+    } catch (e) { toast(e.message, 'error'); }
+    finally { btn.disabled = false; btn.textContent = old; }
+  });
   $('#btnRemoteRefresh').addEventListener('click', async () => {
     if (((S.settings && S.settings.upstreams) || []).length === 0) { toast('还没有上游，先去「服务与日志 → 守望者」填', 'error'); return; }
     toast('正在重新连接上游…');
@@ -1372,6 +1582,13 @@ async function doSearch() {
 
 /* ---------------- 启动 ---------------- */
 bind();
+// 恢复上次的用量仪表盘展开状态（默认折叠）
+try { setUsageExpanded(localStorage.getItem('cnm.usageExpanded') === '1'); } catch (e) { }
+// 提示文字里出现的「模型源」跟设置走，别写死
+(function () {
+  const el = $('#hfHint');
+  if (el) el.textContent = '输入关键词搜索，源：' + hfHost() + '（在「设置 → 模型源」可改）';
+})();
 setModelTab('local');       // 默认打开左边（本地模型）
 (async () => {
   try {

@@ -68,11 +68,10 @@ code, pre, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monosp
 
 #app {
   display: flex; flex: 1; min-height: 0;
-  margin: 0 8px 8px;                       /* 四周露出窗口底色 = 圆角"画框" */
+  margin: 0;                               /* 贴满窗口：圆角由窗口本身（DWM）负责 */
   background: var(--bg2);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  overflow: hidden;                        /* 内容圆角裁剪：顶栏/侧栏的方角到这里全变圆 */
+  border-radius: 0;                        /* 外框圆角交给 DWM，网页内不再画第二层 */
+  overflow: hidden;
 }
 
 /* ---------- 主区顶栏（兼自绘拖动区：WinForms 侧只有 12px 细条） ---------- */
@@ -96,12 +95,17 @@ code, pre, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monosp
 .side {
   width: 204px; flex: 0 0 204px;
   background: var(--bg2);
-  border-right: 1px solid var(--line);
-  border-radius: 16px 0 0 16px;            /* 只圆左侧两角（右角被主区内容盖住） */
+  /* 不要 border-right：它跟外框描边叠在圆角处会露线头 */
   display: flex; flex-direction: column;
   padding: 14px 10px;
   position: relative;
   transition: width .22s cubic-bezier(.4,0,.2,1), flex-basis .22s cubic-bezier(.4,0,.2,1), padding .22s cubic-bezier(.4,0,.2,1);
+}
+/* 侧栏与主区的分隔线：画在内侧，跟圆角保持 10px 距离，不会在圆角处露头 */
+.side::after {
+  content: ''; position: absolute; top: 12px; bottom: 12px; right: 0;
+  width: 1px; background: var(--line);
+  pointer-events: none;
 }
 
 /* 折叠 / 展开按钮（侧栏最底部） */
@@ -118,7 +122,7 @@ code, pre, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monosp
 .side-toggle:hover { color: var(--text); background: var(--bg); }
 
 /* 折叠态：只剩图标（面板变窄仍圆角） */
-.side.collapsed { width: 62px; flex: 0 0 62px; padding: 14px 8px; border-radius: 16px 0 0 16px; }
+.side.collapsed { width: 62px; flex: 0 0 62px; padding: 14px 8px; }
 .side.collapsed .brand { justify-content: center; padding: 2px 0 16px; }
 .side.collapsed .brand-text { opacity: 0; width: 0; min-width: 0; overflow: hidden; }
 .side.collapsed .nav-t { opacity: 0; width: 0; overflow: hidden; white-space: nowrap; }
@@ -195,8 +199,7 @@ nav { display: flex; flex-direction: column; gap: 4px; }
 .mini-wrap:hover #miniModel { color: var(--text); }
 
 /* ---------- 主区 ---------- */
-main { flex: 1; min-width: 0; display: flex; flex-direction: column;
-  border-radius: 0 16px 16px 0; overflow: hidden; }   /* 右侧两角随大容器圆 */
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-bottom: 1px solid var(--line);
@@ -348,6 +351,10 @@ input[type=number].input { text-align: right; }
 .badge.b2 { color: #c3a6ff; border-color: rgba(138,92,255,.35); }
 .badge.b3 { color: #6fe0b0; border-color: rgba(53,201,138,.35); }
 .badge.b4 { color: #ffca7a; border-color: rgba(255,179,71,.35); }
+/* 测速结果：绿=快，橙=一般，红=慢（一眼挑出最快的那个） */
+.badge.b5 { color: #6fe0b0; border-color: rgba(53,201,138,.45); }
+.badge.b5.mid { color: #ffca7a; border-color: rgba(255,179,71,.45); }
+.badge.b5.slow { color: #ff8f8f; border-color: rgba(255,107,107,.45); }
 .card-actions { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
 
 /* ---------- 「谁家的」标（logos.js）：在线浏览 / 外地模型卡片左边那个色块 ---------- */
@@ -499,6 +506,38 @@ input[type=number].input { text-align: right; }
 html[data-theme="light"] #usagePanel { box-shadow: 0 -10px 24px rgba(20,30,60,.10); }
 
 .usage { margin-top: 0; }
+
+/* ---------- 用量：折叠态仪表盘 ---------- */
+.usage-head { cursor: pointer; }
+.usage-head .usage-toggle { flex: 0 0 auto; }
+/* 折叠态：一行关键数字 + 右侧迷你火花线 */
+.usage-glance {
+  display: flex; align-items: flex-end; gap: 18px;
+  padding: 2px 0 0; cursor: pointer;
+  transition: max-height .24s cubic-bezier(.4,0,.2,1), opacity .18s ease, margin .24s;
+  max-height: 90px; opacity: 1; overflow: hidden;
+}
+.ug-item { display: flex; flex-direction: column; gap: 1px; }
+.ug-num { font-size: 19px; font-weight: 600; color: var(--text); letter-spacing: .3px; line-height: 1.15; }
+.ug-num.ug-local { color: var(--accent); }
+.ug-num.ug-up { color: #b98cff; }
+.ug-num.ug-bad { color: var(--err); }
+.ug-lab { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.ug-spark { flex: 1; min-width: 0; height: 44px; display: flex; align-items: flex-end; gap: 2px; }
+.ug-spark .ug-b { flex: 1 1 0; min-width: 1px; border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, var(--accent), var(--accent2)); opacity: .85; }
+.ug-spark .ug-b.zero { background: var(--line); opacity: 1; }
+.ug-spark .ug-b:hover { opacity: 1; }
+
+/* 展开态 */
+.usage-full {
+  max-height: 0; opacity: 0; overflow: hidden;
+  transition: max-height .28s cubic-bezier(.4,0,.2,1), opacity .2s ease, margin .28s;
+}
+.usage.expanded .usage-glance { max-height: 0; opacity: 0; margin-bottom: -6px; pointer-events: none; }
+.usage.expanded .usage-full { max-height: 420px; opacity: 1; }
+.usage.expanded .usage-toggle { color: var(--text); border-color: var(--line2); }
+
 .usage-totals { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 2px 0 14px; color: var(--muted); font-size: 11.5px; }
 .usage-totals .ut-big { font-size: 25px; font-weight: 600; color: var(--text); letter-spacing: .5px; line-height: 1.1; }
 .usage-totals .ut-unit { margin-left: -7px; color: var(--muted); }

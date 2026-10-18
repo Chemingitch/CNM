@@ -98,6 +98,31 @@ public sealed class EngineManager
 
     public string EngineVersionText { get; private set; } = "";
 
+    /// <summary>
+    /// 本机实际装的是哪个后端（vulkan / rocm / cuda / cpu…）。
+    /// 判据是引擎目录里到底有哪个 ggml-*.dll —— llama-server --version 里不带后端名，
+    /// 而「用户下拉里选了什么」不等于「装了什么」。
+    /// </summary>
+    public string InstalledVariant
+    {
+        get
+        {
+            var exe = ResolveEnginePath();
+            if (exe == null) return "";
+            var dir = Path.GetDirectoryName(exe) ?? "";
+            try
+            {
+                if (File.Exists(Path.Combine(dir, "ggml-rocm.dll")) || File.Exists(Path.Combine(dir, "ggml-hip.dll"))) return "rocm";
+                if (File.Exists(Path.Combine(dir, "ggml-cuda.dll"))) return "cuda";
+                if (File.Exists(Path.Combine(dir, "ggml-vulkan.dll"))) return "vulkan";
+                if (Directory.GetFiles(dir, "ggml-cpu-*.dll").Length > 0) return "cpu";
+                if (Directory.GetFiles(dir, "ggml-*.dll").Length > 0) return "generic";
+                return "unknown";
+            }
+            catch { return "unknown"; }
+        }
+    }
+
     public async Task<string> ProbeEngineAsync()
     {
         var exe = ResolveEnginePath();

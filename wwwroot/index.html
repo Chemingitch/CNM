@@ -92,11 +92,13 @@
         <span class="grow"></span>
         <input id="upFilter" class="input" style="max-width:240px" placeholder="过滤（模型 / 厂家 / 上游）…">
         <select id="upLab" class="input" style="max-width:170px"><option value="">全部厂家</option></select>
-        <select id="upSort" class="input" style="max-width:130px">
+        <select id="upSort" class="input" style="max-width:140px">
           <option value="name">按名字</option>
           <option value="lab">按厂家</option>
           <option value="recent">最近用过</option>
+          <option value="speed">按速度（快→慢）</option>
         </select>
+        <button class="btn" id="btnPingAll" title="给这条上游的所有模型各发一次最小请求，量首字延迟（会消耗少量额度）">全部测速</button>
         <button class="btn" id="btnRemoteRefresh">重新连接</button>
         <button class="btn ghost" id="btnRemoteToWatch">去守望者</button>
       </div>
@@ -125,9 +127,9 @@
         <div class="empty" id="remoteEmpty" style="display:none">还没有外地模型 —— 先到「服务与日志 → 守望者」把中转站的地址和 Key 填上。</div>
       </div>
 
-      <!-- 用量：日 / 月 / 年 -->
-      <div class="panel usage" id="usagePanel">
-        <div class="panel-head">
+      <!-- 用量：折叠态看关键数字，点开看完整仪表盘 -->
+      <div class="panel usage collapsed" id="usagePanel">
+        <div class="panel-head usage-head" id="usageHead">
           <b>用量</b>
           <span class="muted small">所有 agent 调进来算的账（只记数字，不记对话内容）</span>
           <span class="grow"></span>
@@ -136,10 +138,44 @@
             <button class="seg-btn" data-utab="month">月</button>
             <button class="seg-btn" data-utab="year">年</button>
           </div>
+          <button class="btn tiny ghost usage-toggle" id="btnUsageToggle" title="展开 / 收起仪表盘">展开 ▾</button>
         </div>
-        <div class="usage-totals" id="usageTotals">—</div>
-        <div class="usage-bars" id="usageBars"></div>
-        <div class="hint" id="usageHint">—</div>
+
+        <!-- 折叠态：一眼看关键数字（点整条也能展开） -->
+        <div class="usage-glance" id="usageGlance" title="点这里展开完整仪表盘">
+          <div class="ug-item">
+            <div class="ug-num" id="ugReq">—</div>
+            <div class="ug-lab" id="ugReqLab">次调用</div>
+          </div>
+          <div class="ug-item">
+            <div class="ug-num ug-local" id="ugLocal">—</div>
+            <div class="ug-lab">本地</div>
+          </div>
+          <div class="ug-item">
+            <div class="ug-num ug-up" id="ugUp">—</div>
+            <div class="ug-lab">外地</div>
+          </div>
+          <div class="ug-item" id="ugFailBox" style="display:none">
+            <div class="ug-num ug-bad" id="ugFail">—</div>
+            <div class="ug-lab">失败</div>
+          </div>
+          <div class="ug-item">
+            <div class="ug-num" id="ugTok">—</div>
+            <div class="ug-lab">token</div>
+          </div>
+          <div class="ug-item">
+            <div class="ug-num" id="ugAvg">—</div>
+            <div class="ug-lab">平均耗时</div>
+          </div>
+          <div class="ug-spark" id="ugSpark"></div>
+        </div>
+
+        <!-- 展开态：完整数字 + 柱状图 + 说明 -->
+        <div class="usage-full" id="usageFull">
+          <div class="usage-totals" id="usageTotals">—</div>
+          <div class="usage-bars" id="usageBars"></div>
+          <div class="hint" id="usageHint">—</div>
+        </div>
       </div>
     </section>
 
@@ -167,7 +203,7 @@
             <span class="muted small" id="hfCount"></span>
           </div>
           <div id="hfResults">
-            <div class="empty">输入关键词搜索，源：hf-mirror.com（HF 国内镜像）</div>
+            <div class="empty" id="hfHint">输入关键词搜索</div>
           </div>
         </div>
         <div class="panel scroll" id="hfFiles">
@@ -203,7 +239,7 @@
           </div>
           <div class="hint">
             本机的 GGUF 从这里出去：兼容 <code>/v1/models</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/embeddings</code>；
-            请求里 <code>model</code> 填 <b>/v1/models</b> 列出的 Id。开了「按请求自动加载」，要哪个模型就自动换哪个。
+            请求里 <code>model</code> 填 <b>/v1/models</b> 列出的 Id。开了「按请求自动加载模型」，要哪个模型就自动换哪个。
           </div>
         </div>
 
@@ -227,8 +263,8 @@
           <div class="hint">
             这里只填中转站的地址和 Key（点「测试」能列出模型就是通了）；<b>模型在「模型库 → 外地模型」里挑</b>，
             点「接入」就是把它设成<b>兜底模型</b>：agent 里写别的外地模型名照样用它自己，写不认识的名字才落到这个。<br>
-            代理那格填 <b>auto</b>（或点「自动检测」）就不用自己猜了：CNM 会并发试「直连 → 系统代理 → 本机常见端口」，
-            谁通用谁，并记住它。写死也行：<code>http://127.0.0.1:7890</code>、<code>socks5://127.0.0.1:1080</code>、<code>system</code>、<code>direct</code>。
+            代理那格填 <b>auto</b>（或点「自动检测」）就不用自己猜了：CNM 先单独试<b>直连</b>（能通就用它，最快最稳），
+            直连不行才并发试「系统代理 / 本机常见端口」，谁通用谁并记住它。写死也行：<code>http://127.0.0.1:7890</code>、<code>socks5://127.0.0.1:1080</code>、<code>system</code>、<code>direct</code>。
             本机库里的 GGUF 仍然优先走本地引擎。
           </div>
         </div>
@@ -260,8 +296,8 @@
         <div class="kv"><label>主目录</label><input class="input grow" id="setModelsDir"><button class="btn ghost tiny" id="btnPickModelsDir">选择目录…</button></div>
         <div class="kv"><label>附加目录</label><input class="input grow" id="setExtraDirs" placeholder="多个目录用 ; 分隔，可留空"><button class="btn ghost tiny" id="btnPickExtraDir">追加目录…</button></div>
         <div class="hint">
-          沿用 LM Studio 的 <code>&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf</code> 布局，两边可以共用一个目录，互不干扰。<br>
-          点「选择目录…」直接挑（选完自动保存并重新扫描）；手填路径的话，记得按这一栏右上角的「保存并重新扫描」。
+          GGUF 放在模型的<b>主目录</b>或任意<b>附加目录</b>下都会被扫到（子目录也认）。
+          点「选择目录…」直接挑（选完自动保存并重新扫描）；手填路径的话，改完按页面最下面的「保存设置」，它会一起重新扫描。
         </div>
       </div>
 

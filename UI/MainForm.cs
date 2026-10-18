@@ -39,9 +39,8 @@ public sealed class MainForm : Form
         Font = new Font("Microsoft YaHei UI", 9f);
 
         // 无系统标题栏：界面自己画标题栏。
-        // 四周留 4px，露出窗口底色 —— 鼠标落在这圈上时 WM_NCHITTEST 才能到 Form，用来拖边缩放。
+        // 窗口四角由 DWM 原生圆角负责（带抗锯齿）；拖边缩放靠 WndProc 的 WM_NCHITTEST。
         FormBorderStyle = FormBorderStyle.None;
-        Padding = new Padding(4);
 
         // Dock 顺序很关键：先加 Fill（WebView2）再加 Top（标题栏），
         // 否则 Fill 会盖住标题栏右侧的窗口按钮。
@@ -84,28 +83,21 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Region 硬裁剪圆角：不依赖 DWM（有的机器 / 有的渲染路径 DWM 圆角不生效）。
-    /// 最大化时取消（铺满屏幕要方角），还原窗口时恢复。
+    /// 圆角交给 DWM（Win11 原生，带抗锯齿 + 合成器合成）。
+    ///
+    /// 以前这里还有一套 Region 硬裁剪兜底，两套叠加会出问题：
+    /// Region 是 GDI 区域，边缘是锯齿（不抗锯齿），叠在 DWM 圆角上，
+    /// 在浅色背景上会露出一条锯齿状的浅色碎线（看着像「线头」）。
+    /// 既然 DWM 圆角实测生效（DwmGetWindowAttribute 读回 =2），就让它独占。
+    ///
+    /// Win10 没有 DWM 圆角（属性不支持），窗口就是直角 —— 比锯齿强。
     /// </summary>
     private void ApplyWindowRegion()
     {
         try
         {
-            if (WindowState == FormWindowState.Maximized) { Region = null; return; }
-            float sc = Math.Max(1f, DeviceDpi / 96f);
-            int radius = (int)Math.Round(14 * sc);
-            int side = Math.Min(Width, Height);
-            if (radius * 2 > side) radius = side / 2;
-            if (radius < 2) { Region = null; return; }
-            int d = radius * 2;
-            var path = new System.Drawing.Drawing2D.GraphicsPath();
-            path.AddArc(0, 0, d, d, 180, 90);
-            path.AddArc(Width - d, 0, d, d, 270, 90);
-            path.AddArc(Width - d, Height - d, d, d, 0, 90);
-            path.AddArc(0, Height - d, d, d, 90, 90);
-            path.CloseFigure();
-            Region?.Dispose();
-            Region = new Region(path);
+            // 主动清掉历史 Region（老配置升级上来时可能还挂着）
+            if (Region != null) { Region.Dispose(); Region = null; }
         }
         catch { }
     }

@@ -28,7 +28,7 @@ public static class SettingsJson
 public sealed class Settings
 {
     /// <summary>
-    /// 模型根目录（LM Studio 布局：&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf）。
+    /// 模型根目录（常见布局：&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf）。
     /// 空 = 自动定位（Load 时填 DefaultModelsDir）—— 不再硬编码某台机器的绝对路径，
     /// 否则新分发用户第一次打开会扫描不存在的目录、看不到模型。
     /// 老用户 settings.json 里已存路径，不受影响。
