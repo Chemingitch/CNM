@@ -37,11 +37,11 @@ public sealed class App
         Router = new OpenAiRouter(Settings, Engine, Library, (m, ct) => Engine.EnsureAsync(m, ct));
 
         Engine.Log += (src, line) => Push(new JsonObject { ["type"] = "log", ["source"] = src, ["line"] = line });
-        Engine.StateChanged += () => PushState();
+        Engine.StateChanged += () => PushStateThrottled();      // 高频（加载各阶段/停止）→ 合并 300ms
         Engine.Crashed += msg => Toast?.Invoke("error", msg);
         Router.Log += line => Push(new JsonObject { ["type"] = "log", ["source"] = "router", ["line"] = line });
         Router.Upstreams.Log += line => Push(new JsonObject { ["type"] = "log", ["source"] = "upstream", ["line"] = line });
-        Router.StateChanged += () => PushState();
+        Router.StateChanged += () => PushStateThrottled();      // 高频（每个请求开始/结束）→ 合并
         Router.RequestLogged += l =>
         {
             lock (_reqLog)
@@ -49,7 +49,7 @@ public sealed class App
                 _reqLog.Insert(0, l);
                 while (_reqLog.Count > 300) _reqLog.RemoveAt(_reqLog.Count - 1);
             }
-            Push(new JsonObject { ["type"] = "req", ["entry"] = ReqJson(l) });
+            Push(new JsonObject { ["type"] = "req", ["entry"] = ReqJson(l) });   // 增量，很轻，保持即时
         };
         Downloads.StateChanged += () =>
         {
@@ -87,16 +87,20 @@ public sealed class App
 
     public static string AppLogPath => Path.Combine(Settings.LogsDir, "cnm.log");
 
+    private static int _appLogLines;
     private static void AppendLogFile(string source, string line)
     {
         try
         {
-            Directory.CreateDirectory(Settings.LogsDir);
             lock (_logFileLock)
             {
                 var f = AppLogPath;
-                var fi = new FileInfo(f);
-                if (fi.Exists && fi.Length > 4L * 1024 * 1024) File.Delete(f);   // 简单滚动：超 4MB 换新的
+                // 每 256 行才查一次轮转：FileInfo 查询也是系统调用，高频日志时白做
+                if ((++_appLogLines & 255) == 0)
+                {
+                    var fi = new FileInfo(f);
+                    if (fi.Exists && fi.Length > 4L * 1024 * 1024) File.Delete(f);   // 简单滚动：超 4MB 换新的
+                }
                 File.AppendAllText(f, $"{DateTime.Now:HH:mm:ss} [{source}] {line}{Environment.NewLine}", System.Text.Encoding.UTF8);
             }
         }
@@ -104,6 +108,31 @@ public sealed class App
     }
 
     private void PushState() => Push(new JsonObject { ["type"] = "state", ["state"] = StateJson() });
+
+    // ---- PushState 合并节流：高频触发（每个请求完成/显存变化）时不全量序列化轰炸 UI ----
+    private int _stateDirty;                    // Interlocked 标志：有待推状态
+    private int _statePushing;                  // 防重入
+
+    /// <summary>延迟合并版 PushState：300ms 内多次触发只推一次（状态本来就是"最新快照"语义）。</summary>
+    private void PushStateThrottled()
+    {
+        Interlocked.Exchange(ref _stateDirty, 1);
+        if (Interlocked.CompareExchange(ref _statePushing, 1, 0) != 0) return;   // 已有人在推，走合并
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (Interlocked.Exchange(ref _stateDirty, 1) == 1)
+                {
+                    Interlocked.Exchange(ref _stateDirty, 0);   // 取走标志
+                    await Task.Delay(300);                       // 合并窗口
+                    Push(new JsonObject { ["type"] = "state", ["state"] = StateJson() });
+                }
+            }
+            catch { }
+            finally { Interlocked.Exchange(ref _statePushing, 0); }
+        });
+    }
 
     public void StartUp()
     {
@@ -134,12 +163,12 @@ public sealed class App
             while (true)
             {
                 try { await Task.Delay(3000); } catch { break; }
-                if (Engine.PollVram()) PushState();
+                if (Engine.PollVram()) PushStateThrottled();     // 显存变化每 3s 才量一次，但推还是合并的
                 Router.Usage.SaveIfDirty();          // 用量统计：攒够 15 秒才真写盘
                 if (Engine.TryIdleUnload())
                 {
                     Toast?.Invoke("info", $"空闲 {Settings.IdleUnloadMinutes} 分钟，已卸载模型并释放显存（下次请求会自动加载）");
-                    PushState();
+                    PushStateThrottled();
                 }
             }
         });
@@ -173,8 +202,18 @@ public sealed class App
             ["scanning"] = Scanning,
             ["ips"] = IpList(),
             ["usage"] = Router.Usage.Json(),
-            ["reqLog"] = ReqLogJson()
+            // reqLog 有增量推送（type:"req"），全量列表只在前端主动调 state 时给：
+            // 节流后的每次状态推送不用再拖着 300 条请求记录重建/序列化。
+            ["reqLog"] = null
         };
+        return st;
+    }
+
+    /// <summary>全量状态（带 reqLog）：只给前端的初始化调用和「state」命令用。</summary>
+    public JsonObject FullStateJson()
+    {
+        var st = StateJson();
+        st["reqLog"] = ReqLogJson();
         return st;
     }
 
@@ -195,6 +234,7 @@ public sealed class App
         ["threads"] = Settings.Threads,
         ["parallel"] = Settings.Parallel,
         ["flashAttn"] = Settings.FlashAttn,
+        ["mmprojOnGpu"] = Settings.MmprojOnGpu,
         ["enginePath"] = Settings.EnginePath,
         ["engineMirror"] = Settings.EngineMirror,
         ["hfEndpoint"] = Settings.HfEndpoint,
@@ -315,7 +355,7 @@ public sealed class App
         switch (cmd)
         {
             case "state":
-                return StateJson();
+                return FullStateJson();
 
             case "scan":
                 return await Task.Run(() => { Scan(); return ModelsJson(); });
@@ -335,7 +375,7 @@ public sealed class App
             }
 
             case "unload":
-                Engine.Stop();
+                await Engine.StopAsync();       // 等退出放线程池，UI 不冻
                 return new JsonObject { ["ok"] = true };
 
             case "openUrl":
@@ -670,13 +710,14 @@ public sealed class App
                 var id = msg["id"]?.GetValue<string>() ?? "";
                 var e = Library.Find(id);
                 if (e == null) return Err("找不到模型 " + id);
-                if (Engine.Loaded != null && Engine.Loaded.FilePath == e.FilePath) Engine.Stop();
+                if (Engine.Loaded != null && Engine.Loaded.FilePath == e.FilePath)
+                    await Engine.StopAsync();                    // UI 不冻
                 if (!IsUnderRoots(e.FilePath)) return Err("该文件不在模型目录内，拒绝删除。");
                 try
                 {
-                    File.Delete(e.FilePath);
+                    await Task.Run(() => File.Delete(e.FilePath));   // 几 GB 的文件删除也放线程池
                     Toast?.Invoke("ok", "已删除 " + e.FileName);
-                    Scan();
+                    await Task.Run(() => Scan());
                     Push(new JsonObject { ["type"] = "models", ["models"] = ModelsJson() });
                     return new JsonObject { ["ok"] = true };
                 }
@@ -756,7 +797,8 @@ public sealed class App
         int oldPort = Settings.Port;
         bool oldLan = Settings.LanExposed;
 
-        Settings.ModelsDir = Str("modelsDir", Settings.ModelsDir);
+        Settings.ModelsDir = Str("modelsDir", Settings.ModelsDir).Trim();
+        if (string.IsNullOrWhiteSpace(Settings.ModelsDir)) Settings.ModelsDir = Settings.DefaultModelsDir();
         Settings.ApiKey = Str("apiKey", Settings.ApiKey);
         Settings.Port = Int("port", Settings.Port);
         Settings.LanExposed = Bool("lanExposed", Settings.LanExposed);
@@ -770,6 +812,7 @@ public sealed class App
         Settings.Threads = Int("threads", Settings.Threads);
         Settings.Parallel = Int("parallel", Settings.Parallel);
         Settings.FlashAttn = Bool("flashAttn", Settings.FlashAttn);
+        Settings.MmprojOnGpu = Bool("mmprojOnGpu", Settings.MmprojOnGpu);
         Settings.EnginePath = Str("enginePath", Settings.EnginePath);
         Settings.EngineMirror = Str("engineMirror", Settings.EngineMirror).Trim();
         Settings.HfEndpoint = Str("hfEndpoint", Settings.HfEndpoint);

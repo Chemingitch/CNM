@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <Version>0.1.3</Version>
+    <Version>0.2.0</Version>
     <Product>CNM</Product>
     <Company>Chem</Company>
     <AssemblyTitle>CNM - 本地模型管理 / OpenAI 兼容转发</AssemblyTitle>

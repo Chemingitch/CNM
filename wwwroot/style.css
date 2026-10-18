@@ -37,19 +37,101 @@ body {
   font: 13px/1.55 "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
   overflow: hidden;
   user-select: none;
+  display: flex; flex-direction: column;
 }
 code, pre, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; }
 
-#app { display: flex; height: 100vh; }
+/* ---------- 自绘标题栏（无系统边框） ---------- */
+#titlebar {
+  flex: 0 0 38px; height: 38px;
+  display: flex; align-items: center;
+  padding: 0 4px 0 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag; app-region: drag;
+  user-select: none;
+}
+.tb-drag { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
+.tb-name { font-size: 12.5px; font-weight: 600; letter-spacing: .4px; flex: 0 0 auto; }
+.tb-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-btns { display: flex; gap: 2px; -webkit-app-region: no-drag; app-region: no-drag; }
+.tb-btns button {
+  width: 34px; height: 26px; padding: 0;
+  border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted);
+  font-size: 12px; font-family: inherit; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.tb-btns button:hover { background: var(--panel); color: var(--text); }
+#btnClose:hover { background: #e5484d; color: #fff; }
 
-/* ---------- 侧边 ---------- */
+#app {
+  display: flex; flex: 1; min-height: 0;
+  margin: 0 8px 8px;                       /* 四周露出窗口底色 = 圆角"画框" */
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;                        /* 内容圆角裁剪：顶栏/侧栏的方角到这里全变圆 */
+}
+
+/* ---------- 主区顶栏（兼自绘拖动区：WinForms 侧只有 12px 细条） ---------- */
+.topbar {
+  -webkit-app-region: drag; app-region: drag;
+}
+.topbar .btn, .topbar .pill, .win-btns { -webkit-app-region: no-drag; app-region: no-drag; }
+.win-btns { display: flex; gap: 2px; margin-left: 6px; }
+.win-btns button {
+  width: 32px; height: 26px; padding: 0;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--muted);
+  font-size: 13px; font-family: inherit; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.win-btns button:hover { background: var(--panel); color: var(--text); }
+#btnClose:hover { background: #e5484d; color: #fff; }
+
+/* ---------- 侧边：圆角悬浮面板（展开/折叠都圆润） ---------- */
 .side {
   width: 204px; flex: 0 0 204px;
   background: var(--bg2);
   border-right: 1px solid var(--line);
+  border-radius: 16px 0 0 16px;            /* 只圆左侧两角（右角被主区内容盖住） */
   display: flex; flex-direction: column;
   padding: 14px 10px;
+  position: relative;
+  transition: width .22s cubic-bezier(.4,0,.2,1), flex-basis .22s cubic-bezier(.4,0,.2,1), padding .22s cubic-bezier(.4,0,.2,1);
 }
+
+/* 折叠 / 展开按钮（侧栏最底部） */
+.side-toggle {
+  margin-top: 10px;
+  width: 100%; height: 28px; padding: 0;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--panel); color: var(--muted);
+  font-size: 11.5px; font-family: inherit;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.side-toggle:hover { color: var(--text); background: var(--bg); }
+
+/* 折叠态：只剩图标（面板变窄仍圆角） */
+.side.collapsed { width: 62px; flex: 0 0 62px; padding: 14px 8px; border-radius: 16px 0 0 16px; }
+.side.collapsed .brand { justify-content: center; padding: 2px 0 16px; }
+.side.collapsed .brand-text { opacity: 0; width: 0; min-width: 0; overflow: hidden; }
+.side.collapsed .nav-t { opacity: 0; width: 0; overflow: hidden; white-space: nowrap; }
+.side.collapsed .nav-item { justify-content: center; gap: 0; padding: 9px 0; }
+.side.collapsed .nav-item .ic { width: auto; font-size: 16px; }
+.side.collapsed .side-foot { padding: 10px 0 2px; display: flex; flex-direction: column; align-items: center; border-top: 1px solid var(--line); }
+.side.collapsed .mini-wrap { display: flex; justify-content: center; }
+.side.collapsed #miniModel { display: block; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted); font-size: 0; text-indent: -999px; overflow: hidden; }
+.side.collapsed .mini.sub { display: none; }
+.side.collapsed .side-toggle { width: 34px; font-size: 0; gap: 0; }
+.side.collapsed .side-toggle::before { content: '»'; font-size: 13px; }
+
 .brand { display: flex; gap: 10px; align-items: center; padding: 2px 6px 16px; }
 .brand .logo {
   width: 34px; height: 34px; border-radius: 10px;
@@ -64,7 +146,8 @@ code, pre, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monosp
 .brand .logo.custom-on { background: transparent; box-shadow: none; }
 .brand .logo.custom-on .mark { display: none; }
 .brand .logo.custom-on img.custom { display: block; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.25;
+  transition: opacity .16s ease, width .22s cubic-bezier(.4,0,.2,1); overflow: hidden; }
 .brand-text b { font-size: 14px; letter-spacing: .3px; }
 .brand-text small { color: var(--muted); font-size: 10px; white-space: nowrap; }
 
@@ -76,17 +159,44 @@ nav { display: flex; flex-direction: column; gap: 4px; }
   cursor: pointer; transition: .15s;
 }
 .nav-item .ic { width: 16px; text-align: center; opacity: .9; }
+.nav-t { transition: opacity .12s ease, width .22s cubic-bezier(.4,0,.2,1); overflow: hidden; white-space: nowrap; }
 .nav-item:hover { background: var(--panel); color: var(--text); }
 .nav-item.active {
   background: linear-gradient(135deg, rgba(91,140,255,.18), rgba(138,92,255,.14));
   color: var(--text); box-shadow: inset 0 0 0 1px rgba(91,140,255,.28);
 }
-.side-foot { margin-top: auto; padding: 10px 6px 2px; border-top: 1px solid var(--line); }
-.mini { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-foot { margin-top: auto; padding: 10px 6px 2px; border-top: 1px solid var(--line); }.mini { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini.sub { color: var(--muted); }
 
+/* 模型名：hover 向上弹气泡显示全称 + logo */
+.mini-wrap { position: relative; }
+.mini-tip {
+  position: absolute; left: 0; bottom: calc(100% + 12px);
+  min-width: 190px; max-width: 320px;
+  padding: 10px 12px;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0,0,0,.4);
+  opacity: 0; visibility: hidden; transform: translateY(7px) scale(.97);
+  transform-origin: bottom left;
+  transition: opacity .16s ease, transform .18s cubic-bezier(.34,1.4,.64,1), visibility .16s;
+  pointer-events: none; z-index: 60;
+}
+.mini-tip::after {
+  content: ''; position: absolute; left: 16px; top: 100%;
+  border: 7px solid transparent; border-top-color: var(--bg2);
+}
+.mini-wrap:hover .mini-tip,
+.mini-wrap:focus-within .mini-tip { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+.mini-tip .tip-name { font-size: 12.5px; font-weight: 600; color: var(--text);
+  line-height: 1.35; overflow-wrap: anywhere; }
+.mini-tip .tip-sub { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.3; }
+.mini-tip .lgb { flex: 0 0 auto; }
+.mini-wrap:hover #miniModel { color: var(--text); }
+
 /* ---------- 主区 ---------- */
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column;
+  border-radius: 0 16px 16px 0; overflow: hidden; }   /* 右侧两角随大容器圆 */
 .topbar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-bottom: 1px solid var(--line);

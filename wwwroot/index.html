@@ -9,7 +9,7 @@
 <body>
 
 <div id="app">
-  <aside class="side">
+  <aside class="side" id="side">
     <div class="brand">
       <div class="logo" id="brandLogo" aria-hidden="true">
         <svg class="mark" viewBox="0 0 64 64">
@@ -31,15 +31,19 @@
     </div>
 
     <nav id="nav">
-      <button class="nav-item active" data-view="models"><span class="ic">▦</span>模型库</button>
-      <button class="nav-item" data-view="browse"><span class="ic">☁</span>在线浏览</button>
-      <button class="nav-item" data-view="service"><span class="ic">⇄</span>服务与日志</button>
-      <button class="nav-item" data-view="settings"><span class="ic">⚙</span>设置</button>
+      <button class="nav-item active" data-view="models"><span class="ic">▦</span><span class="nav-t">模型库</span></button>
+      <button class="nav-item" data-view="browse"><span class="ic">☁</span><span class="nav-t">在线浏览</span></button>
+      <button class="nav-item" data-view="service"><span class="ic">⇄</span><span class="nav-t">服务与日志</span></button>
+      <button class="nav-item" data-view="settings"><span class="ic">⚙</span><span class="nav-t">设置</span></button>
     </nav>
 
     <div class="side-foot">
-      <div class="mini" id="miniModel">未加载模型</div>
+      <div class="mini-wrap">
+        <div class="mini" id="miniModel">未加载模型</div>
+        <div class="mini-tip" id="miniTip"></div>
+      </div>
       <div class="mini sub" id="miniService">服务已停止</div>
+      <button id="btnSide" class="side-toggle" title="折叠侧栏" aria-label="折叠侧栏">« 收起侧栏</button>
     </div>
   </aside>
 
@@ -51,6 +55,11 @@
       <button class="btn primary" id="btnStart">启动服务</button>
       <button class="btn" id="btnStop">停止</button>
       <button class="btn ghost" id="btnTheme" title="切换主题">◐</button>
+      <div class="win-btns">
+        <button id="btnMin" title="最小化">&#x2013;</button>
+        <button id="btnMax" title="最大化/还原">&#x25A1;</button>
+        <button id="btnClose" title="关闭">&#x00D7;</button>
+      </div>
     </header>
 
     <!-- ============ 模型库 ============ -->
@@ -283,6 +292,8 @@
         <div class="kv"><label>CPU 线程</label><input class="input" style="max-width:140px" id="setThreads" type="number"><span class="muted small">0 = 自动</span></div>
         <div class="kv"><label>并行槽位</label><input class="input" style="max-width:140px" id="setParallel" type="number"></div>
         <div class="kv"><label>Flash Attention</label><label class="switch"><input type="checkbox" id="setFa"><span></span></label></div>
+        <div class="kv"><label>视觉编码器进 GPU</label><label class="switch"><input type="checkbox" id="setMmprojGpu"><span></span></label>
+          <span class="muted small">看图用的 mmproj：默认留在 CPU（省显存）；大显存卡打开，编码快几倍、CPU 不再发烫。改后重新加载模型生效</span></div>
       </div>
 
       <div class="panel">

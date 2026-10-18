@@ -3,11 +3,50 @@ using System.Text.Json.Serialization;
 
 namespace CNM.Core;
 
+/// <summary>
+/// 序列化策略：磁盘上统一 camelCase（与前端/App.cs 手工映射的键名完全一致）。
+/// 反序列化开大小写不敏感 —— 旧版本的 PascalCase 配置照样能读进来，无痛升级。
+/// 曾经 C# 默认存 PascalCase、前端读 camelCase，靠 App.cs 手工映射硬对齐；
+/// 每加一个设置要手改 5 处，漏一处就静默失效（MmprojOnGpu 就踩过这个坑）。
+/// </summary>
+public static class SettingsJson
+{
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    public static readonly JsonSerializerOptions LoadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+}
+
 /// <summary>应用设置，落在 %APPDATA%\CNM\settings.json</summary>
 public sealed class Settings
 {
-    /// <summary>模型根目录（LM Studio 布局：&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf）</summary>
-    public string ModelsDir { get; set; } = @"E:\C\CTools\AI Make\LLM\models";
+    /// <summary>
+    /// 模型根目录（LM Studio 布局：&lt;作者&gt;\&lt;仓库&gt;\xxx.gguf）。
+    /// 空 = 自动定位（Load 时填 DefaultModelsDir）—— 不再硬编码某台机器的绝对路径，
+    /// 否则新分发用户第一次打开会扫描不存在的目录、看不到模型。
+    /// 老用户 settings.json 里已存路径，不受影响。
+    /// </summary>
+    public string ModelsDir { get; set; } = "";
+
+    /// <summary>自动定位模型目录：优先「程序目录下 models」，其次「上一级目录下 models」，
+    /// 都没有就返回程序目录下的 models（Scan 会创建它）。</summary>
+    public static string DefaultModelsDir()
+    {
+        var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(exeDir) ?? exeDir;
+        foreach (var cand in new[] { Path.Combine(exeDir, "models"), Path.Combine(parent, "models") })
+        {
+            try { if (Directory.Exists(cand)) return cand; } catch { }
+        }
+        return Path.Combine(exeDir, "models");
+    }
 
     /// <summary>额外扫描目录</summary>
     public List<string> ExtraModelDirs { get; set; } = new();
@@ -50,6 +89,13 @@ public sealed class Settings
 
     /// <summary>Flash Attention</summary>
     public bool FlashAttn { get; set; } = true;
+
+    /// <summary>
+    /// 视觉编码器（mmproj）卸载到 GPU。默认 false（CNM 历史行为：
+    /// mmproj 留在 CPU/内存跑，省显存，代价是每次发图 CPU 全核编码、慢）。
+    /// 大显存卡（≥16GB）建议开 —— 编码快几倍，CPU 不再发烫。
+    /// </summary>
+    public bool MmprojOnGpu { get; set; } = false;
 
     /// <summary>llama-server.exe 路径，空 = 自动查找 engine\llama\</summary>
     public string EnginePath { get; set; } = "";
@@ -147,10 +193,12 @@ public sealed class Settings
         {
             if (File.Exists(FilePath))
             {
-                var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath));
+                // 用 LoadOptions（camelCase + 大小写不敏感），老 PascalCase 配置无缝兼容
+                var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), SettingsJson.LoadOptions);
                 if (s != null)
                 {
                     if (string.IsNullOrWhiteSpace(s.ApiKey)) s.ApiKey = NewKey();
+                    if (string.IsNullOrWhiteSpace(s.ModelsDir)) s.ModelsDir = DefaultModelsDir();
                     return s;
                 }
             }
@@ -161,7 +209,7 @@ public sealed class Settings
             try { File.Copy(FilePath, FilePath + ".bad-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"), true); } catch { }
         }
 
-        var fresh = new Settings { ApiKey = NewKey() };
+        var fresh = new Settings { ApiKey = NewKey(), ModelsDir = DefaultModelsDir() };
         fresh.Save();
         return fresh;
     }
@@ -170,7 +218,8 @@ public sealed class Settings
     {
         try
         {
-            var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+            // camelCase 序列化：磁盘格式与前端键名完全对齐，App.cs 手工映射从此只是冗余备份
+            var json = JsonSerializer.Serialize(this, SettingsJson.Options);
             File.WriteAllText(FilePath, json);
         }
         catch { }

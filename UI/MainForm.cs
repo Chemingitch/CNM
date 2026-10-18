@@ -12,6 +12,7 @@ public sealed class MainForm : Form
 
     private readonly App _app;
     private readonly WebView2 _web;
+    private Panel _tb;      // 自绘拖动条（无系统边框；窗口按钮在网页顶栏）
     private NotifyIcon _tray;
     private ContextMenuStrip _menu;
     private ToolStripMenuItem _miToggle;
@@ -37,8 +38,19 @@ public sealed class MainForm : Form
         Icon = Branding.LoadAppIcon(32);
         Font = new Font("Microsoft YaHei UI", 9f);
 
+        // 无系统标题栏：界面自己画标题栏。
+        // 四周留 4px，露出窗口底色 —— 鼠标落在这圈上时 WM_NCHITTEST 才能到 Form，用来拖边缩放。
+        FormBorderStyle = FormBorderStyle.None;
+        Padding = new Padding(4);
+
+        // Dock 顺序很关键：先加 Fill（WebView2）再加 Top（标题栏），
+        // 否则 Fill 会盖住标题栏右侧的窗口按钮。
         _web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
         Controls.Add(_web);
+
+        _tb = new Panel { Dock = DockStyle.Top, Height = 38 };
+        BuildTitleBar();
+        Controls.Add(_tb);
 
         _app.Send += OnSend;
         _app.Toast += OnToast;
@@ -50,17 +62,131 @@ public sealed class MainForm : Form
 
     private bool IsLight => string.Equals(_app.Settings.Theme, "light", StringComparison.OrdinalIgnoreCase);
 
+    // ---------- 自绘标题栏（无系统边框用） ----------
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    private const int WM_NCLBUTTONDOWN = 0xA1, HTCAPTION = 2;
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2;
+
+    /// <summary>Win11 原生圆角；Win10 上调用失败就保持直角（不影响使用）。</summary>
+    private void ApplyRoundedCorners()
+    {
+        try
+        {
+            int pref = DWMWCP_ROUND;
+            DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Region 硬裁剪圆角：不依赖 DWM（有的机器 / 有的渲染路径 DWM 圆角不生效）。
+    /// 最大化时取消（铺满屏幕要方角），还原窗口时恢复。
+    /// </summary>
+    private void ApplyWindowRegion()
+    {
+        try
+        {
+            if (WindowState == FormWindowState.Maximized) { Region = null; return; }
+            float sc = Math.Max(1f, DeviceDpi / 96f);
+            int radius = (int)Math.Round(14 * sc);
+            int side = Math.Min(Width, Height);
+            if (radius * 2 > side) radius = side / 2;
+            if (radius < 2) { Region = null; return; }
+            int d = radius * 2;
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            path.AddArc(0, 0, d, d, 180, 90);
+            path.AddArc(Width - d, 0, d, d, 270, 90);
+            path.AddArc(Width - d, Height - d, d, d, 0, 90);
+            path.AddArc(0, Height - d, d, d, 90, 90);
+            path.CloseFigure();
+            Region?.Dispose();
+            Region = new Region(path);
+        }
+        catch { }
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        ApplyWindowRegion();      // 跟随尺寸 / 最大化 / 还原
+    }
+
+    private void BuildTitleBar()
+    {
+        // 只留一条细拖动条贴着窗口顶（窗口按钮在网页顶栏里，走 windowMinimize 等消息）
+        float sc = Math.Max(1f, DeviceDpi / 96f);
+        _tb.BackColor = IsLight ? Color.FromArgb(238, 241, 246) : Color.FromArgb(14, 16, 20);
+        _tb.Height = (int)Math.Round(12 * sc);
+
+        _tb.MouseDown -= OnTitleBarDrag;
+        _tb.MouseDown += OnTitleBarDrag;
+        _tb.DoubleClick -= OnTitleBarDoubleClick;
+        _tb.DoubleClick += OnTitleBarDoubleClick;
+    }
+
+    private void ToggleMaximize()
+    {
+        try { MaximizedBounds = Screen.FromHandle(Handle).WorkingArea; } catch { }
+        WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+    }
+
+    private void OnTitleBarDrag(object s, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        ReleaseCapture();
+        SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+    }
+
+    private void OnTitleBarDoubleClick(object s, EventArgs e) => ToggleMaximize();
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
         ApplyWindowSize();
         ApplyTitleBarTheme();
+        ApplyRoundedCorners();    // Win11 DWM 圆角（阴影圆）
+        BuildTitleBar();          // 句柄就绪后 DeviceDpi 才准，按真实 DPI 重建一次
+        ApplyWindowRegion();      // 硬裁剪兜底：DWM 不生效也保证四角是圆的
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
         ApplyWindowSize();
+    }
+
+    /// <summary>无边框窗口：4px 边距那圈自己处理拖边缩放；最大化按工作区，别盖住任务栏。</summary>
+    private const int WM_NCHITTEST = 0x0084, WM_GETMINMAXINFO = 0x0024;
+    private const int HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14,
+                      HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_NCHITTEST)
+        {
+            base.WndProc(ref m);
+            if (m.Result != (IntPtr)1) return;             // 1 = HTCLIENT，只有客户区才继续判
+            long lp = m.LParam.ToInt64();
+            var p = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+            int edge = 5;
+            bool l = p.X <= edge, r = p.X >= ClientSize.Width - edge;
+            bool t = p.Y <= edge, b = p.Y >= ClientSize.Height - edge;
+            if (t && l) m.Result = (IntPtr)HTTOPLEFT;
+            else if (t && r) m.Result = (IntPtr)HTTOPRIGHT;
+            else if (b && l) m.Result = (IntPtr)HTBOTTOMLEFT;
+            else if (b && r) m.Result = (IntPtr)HTBOTTOMRIGHT;
+            else if (l) m.Result = (IntPtr)HTLEFT;
+            else if (r) m.Result = (IntPtr)HTRIGHT;
+            else if (t) m.Result = (IntPtr)HTTOP;
+            else if (b) m.Result = (IntPtr)HTBOTTOM;
+            return;
+        }
+        base.WndProc(ref m);
     }
 
     /// <summary>把逻辑尺寸按当前 DPI 换算成物理像素，并兜到屏幕工作区内</summary>
@@ -84,7 +210,13 @@ public sealed class MainForm : Form
     {
         try
         {
-            if (IsHandleCreated) BeginInvoke(new Action(ApplyTitleBarTheme));
+            if (IsHandleCreated) BeginInvoke(new Action(() =>
+            {
+                ApplyTitleBarTheme();
+                BuildTitleBar();                                 // 自绘标题栏跟随主题
+                BackColor = IsLight ? LightBg : DarkBg;
+                if (_web != null) _web.DefaultBackgroundColor = BackColor;
+            }));
         }
         catch { }
     }
@@ -153,6 +285,7 @@ public sealed class MainForm : Form
         try
         {
             _miToggle.Text = _app.Router.Running ? "停止服务" : "启动服务";
+            TrayMenu.SetToggleState(_miToggle, _app.Router.Running);
             _tray.Text = "CNM — " + (_app.Router.Running ? $"服务中 :{_app.Router.Port}" : "服务已停");
         }
         catch { }
@@ -244,6 +377,20 @@ public sealed class MainForm : Form
         if (msg == null) return;
 
         string reqId = msg["reqId"]?.ToString() ?? "";
+        string cmd = msg["cmd"]?.ToString() ?? "";
+
+        // 无边框窗口：最小化 / 最大化 / 关闭 由界面上的按钮发过来
+        if (cmd == "windowMinimize") { WindowState = FormWindowState.Minimized; Reply(reqId, true, null, null); return; }
+        if (cmd == "windowMaximize")
+        {
+            // 用工作区做最大化边界，别盖住任务栏
+            try { MaximizedBounds = Screen.FromHandle(Handle).WorkingArea; } catch { }
+            WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+            Reply(reqId, true, null, null);
+            return;
+        }
+        if (cmd == "windowClose") { Reply(reqId, true, null, null); Close(); return; }
+
         try
         {
             var data = await _app.HandleAsync(msg);

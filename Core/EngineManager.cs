@@ -183,7 +183,7 @@ public sealed class EngineManager
         if (exe == null)
             return new LoadResult { Ok = false, Message = "找不到 llama-server.exe，请把 llama.cpp 的 Vulkan 版解压到 engine\\llama\\ 下。", Entry = entry };
 
-        Stop();
+        await StopAsync();               // 换模型时也走异步停：不冻 UI 线程（请求方本来就在后台线程，但保持一致）
         await Task.Delay(400, ct);
 
         BackendPort = FreePort();
@@ -209,7 +209,12 @@ public sealed class EngineManager
         if (!_s.FlashAttn) args.AddRange(new[] { "-fa", "off" });
         if (_s.Threads > 0) args.AddRange(new[] { "-t", _s.Threads.ToString() });
         if (!string.IsNullOrWhiteSpace(entry.MmprojPath) && File.Exists(entry.MmprojPath))
-            args.AddRange(new[] { "--mmproj", entry.MmprojPath, "--no-mmproj-offload" });
+        {
+            args.AddRange(new[] { "--mmproj", entry.MmprojPath });
+            // MmprojOnGpu=false（默认）→ 留 CPU/内存（省显存，小卡友好）
+            // MmprojOnGpu=true  → 跟主模型一起进 GPU（大显存卡：编码快几倍，CPU 不热）
+            if (!_s.MmprojOnGpu) args.Add("--no-mmproj-offload");
+        }
 
         Emit("engine", $"> {Path.GetFileName(exe)} {string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a))}");
 
@@ -288,7 +293,7 @@ public sealed class EngineManager
         _pending = null;
         LastError = "等引擎就绪超时（300 秒）。" + Tail();
         StateChanged?.Invoke();
-        Stop();
+        await StopAsync();
         return new LoadResult { Ok = false, Message = LastError, Entry = entry };
     }
 
@@ -312,6 +317,41 @@ public sealed class EngineManager
         _vramModel = _vramKv = _vramCompute = 0;
         LiveVramMiB = -1;
         StateChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 异步停止：等引擎退出（最长 8 秒）放到线程池，别冻 UI。
+    /// Kill 本身立即返回，慢的是 WaitForExit —— 卸 9GB 显存的进程退出就是得等几秒。
+    /// 串行化：两次 Stop 并发会互相踩 _stoppingProc / 状态清空。
+    /// </summary>
+    private readonly SemaphoreSlim _stopGate = new(1, 1);
+
+    public async Task StopAsync()
+    {
+        await _stopGate.WaitAsync();
+        try
+        {
+            var proc = _proc;
+            if (proc != null && !proc.HasExited)
+            {
+                _stoppingProc = proc;
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                try { await proc.WaitForExitAsync(CancellationToken.None); } catch { }   // 无超时：主动停必然要停干净
+                Emit("engine", "[已停止] 引擎进程结束");
+            }
+        }
+        catch { }
+        finally
+        {
+            _proc = null;
+            Loaded = null;
+            _pending = null;
+            IsLoading = false;
+            _vramModel = _vramKv = _vramCompute = 0;
+            LiveVramMiB = -1;
+            StateChanged?.Invoke();
+            _stopGate.Release();
+        }
     }
 
     /// <summary>引擎进程退出了：不管是崩的还是被停的，先把状态清干净（别再显示“已就绪”）</summary>
@@ -375,18 +415,23 @@ public sealed class EngineManager
         Log?.Invoke(source, line);
     }
 
-    /// <summary>引擎日志落盘到 %APPDATA%\CNM\logs\engine.log（超过 4MB 轮转一次）</summary>
+    /// <summary>引擎日志落盘到 %APPDATA%\CNM\logs\engine.log（超过 4MB 轮转一次）。
+    /// 轮转检查不是每行都做 —— FileInfo+长度查询也是系统调用，推理时每秒几十行白查。
+    /// 每 256 行查一次够了：4MB 上限多算 256 行毫无影响。</summary>
+    private int _logLines;
     private void WriteLog(string source, string line)
     {
         try
         {
-            Directory.CreateDirectory(Settings.LogsDir);
-            var fi = new FileInfo(LogPath);
-            if (fi.Exists && fi.Length > 4 * 1024 * 1024)
+            if ((++_logLines & 255) == 0)          // 每 256 行才查一次轮转
             {
-                var old = Path.Combine(Settings.LogsDir, "engine.1.log");
-                try { File.Delete(old); } catch { }
-                try { File.Move(LogPath, old); } catch { }
+                var fi = new FileInfo(LogPath);
+                if (fi.Exists && fi.Length > 4 * 1024 * 1024)
+                {
+                    var old = Path.Combine(Settings.LogsDir, "engine.1.log");
+                    try { File.Delete(old); } catch { }
+                    try { File.Move(LogPath, old); } catch { }
+                }
             }
             File.AppendAllText(LogPath,
                 $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{source}] {line}{Environment.NewLine}", Encoding.UTF8);

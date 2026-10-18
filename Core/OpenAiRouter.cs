@@ -315,7 +315,17 @@ public sealed class OpenAiRouter
                     }
                     if (_s.AutoLoadOnRequest)
                     {
-                        var lr = await _ensure(model ?? "", ct);
+                        // 加载可能要几分钟：一边等一边盯着客户端，断开就取消加载（ct 传进 EnsureAsync）
+                        using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        var loadTask = _ensure(model ?? "", loadCts.Token);
+                        var watchTask = WatchClientAsync(client, loadCts);
+                        await Task.WhenAny(loadTask, watchTask);
+                        if (watchTask.IsCompleted)
+                        {
+                            log.Status = 499;      // 客户端先走了：取消加载，别白等
+                            return;
+                        }
+                        var lr = loadTask.Result;
                         if (!lr.Ok)
                         {
                             await WriteJsonAsync(ns, 503, ErrorJson(lr.Message), ct);
@@ -346,6 +356,12 @@ public sealed class OpenAiRouter
         catch (OperationCanceledException)
         {
             // 超时/断开：还没回包的话就没法回了，只能记个 499（客户端自己会超时）
+            if (log.Status <= 0) log.Status = 499;
+        }
+        catch (System.IO.IOException)
+        {
+            // 客户端断开（读请求/写响应半途连接断了）：后面没意义了，掐掉正在等的加载/转发，
+            // 不然客户端早跑了，模型还在那儿吭哧吭哧加载几分钟。
             if (log.Status <= 0) log.Status = 499;
         }
         catch (Exception ex)
@@ -406,6 +422,39 @@ public sealed class OpenAiRouter
         return false;
     }
 
+    /// <summary>
+    /// 盯着客户端还活着没：断开（Poll 返回 false）或出错就返回。
+    /// 轮询 500ms —— 对「加载要几分钟」的场景足够快，开销可忽略。
+    /// </summary>
+    private static async Task WatchClientAsync(TcpClient client, CancellationTokenSource cancel)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(500, cancel.Token);
+                if (cancel.Token.IsCancellationRequested) return;
+                try
+                {
+                    if (client.Client == null || !client.Connected) { cancel.Cancel(); return; }
+                    if (client.Client.Poll(0, SelectMode.SelectRead) && client.Client.Available == 0)
+                    {
+                        cancel.Cancel();     // 对端关闭
+                        return;
+                    }
+                }
+                catch (ObjectDisposedException) { return; }
+                catch
+                {
+                    try { cancel.Cancel(); } catch { }
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
     private async Task<(int status, long bytes, long pt, long ct)> ProxyAsync(NetworkStream client, BufStream reader, Dictionary<string, string> headers,
                                        string method, string target, byte[] body, CancellationToken ct)
     {
@@ -455,19 +504,28 @@ public sealed class OpenAiRouter
             if (!headParsed)
             {
                 headProbe.Write(buf, 0, n);
-                if (headProbe.Length >= 16 || n < buf.Length)
+                // 响应头第一行固定 "HTTP/x.x NNN"，状态码在字节 9-11（ASCII 数字）。
+                // 手写读字节：比 Regex 快，省一次 ASCII 字符串分配 + 正则匹配（GC 降压）。
+                if (headProbe.Length >= 12)
                 {
-                    var txt = Encoding.ASCII.GetString(headProbe.ToArray(), 0, (int)Math.Min(headProbe.Length, 256));
-                    var m = Regex.Match(txt, @"^HTTP/\d\.\d (\d{3})");
-                    if (m.Success) { status = int.Parse(m.Groups[1].Value); headParsed = true; }
-                    else if (headProbe.Length > 4096) headParsed = true;
+                    var probe = headProbe.ToArray();
+                    if (probe[9] >= (byte)'1' && probe[9] <= (byte)'9' &&
+                        probe[10] >= (byte)'0' && probe[10] <= (byte)'9' &&
+                        probe[11] >= (byte)'0' && probe[11] <= (byte)'9')
+                    {
+                        status = (probe[9] - '0') * 100 + (probe[10] - '0') * 10 + (probe[11] - '0');
+                        headParsed = true;
+                    }
+                    else if (headProbe.Length > 4096) headParsed = true;   // 兜底：异常头防死循环
                 }
             }
 
             try
             {
                 await client.WriteAsync(buf, 0, n, ct);
-                await client.FlushAsync(ct);
+                // 不再每包 FlushAsync：NoDelay=true 已保证低延迟，逐包 flush 反而多 N 次 syscall，
+                // 高 token 速率下白给延迟。客户端读空后自然阻塞，不需要显式 flush。
+                // 早期版本在这里显式 FlushAsync，实测对首 token 延迟有可测影响。
             }
             catch { break; }
             bytesOut += n;

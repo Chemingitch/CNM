@@ -30,7 +30,8 @@ const S = {
   utab: 'day',
   upDirty: false,
   upShown: null,
-  dirty: false
+  dirty: false,
+  loadingModel: null        // 正在加载的模型 id（防重入：加载中再点「加载」直接拒绝）
 };
 
 /* ---------------- 通信 ---------------- */
@@ -173,7 +174,19 @@ function onState(st) {
   ps.className = 'pill ' + (svc.running ? 'on' : 'off');
   ps.innerHTML = '<span class="dot"></span><span>' + (svc.running ? '服务中 :' + svc.port : '服务停止') + '</span>';
 
-  $('#miniModel').textContent = eng.running ? (eng.loadedId || '已加载') + vram : '未加载模型';
+  const miniFull = eng.running ? (eng.loadedId || '已加载') : '未加载模型';
+  $('#miniModel').textContent = miniFull + vram;
+  (function () {                          // hover 气泡：名字太长被截断时，悬停看全称 + logo
+    const tip = $('#miniTip');
+    if (!tip) return;
+    const lm = eng.running ? (S.models.find((m) => m.loaded) || null) : null;
+    const nm = lm ? lm.name : miniFull;
+    const sub = lm ? [lm.repo, lm.quant].filter(Boolean).join(' · ') : (eng.running ? '已加载' : '服务未启动');
+    let icon = '';
+    try { icon = lm && typeof logoTile === 'function' ? logoTile(localKey(lm)) : ''; } catch (e) { }
+    tip.innerHTML = icon + '<div style="min-width:0"><div class="tip-name">' + esc(nm) + '</div>' +
+      (sub ? '<div class="tip-sub">' + esc(sub) + '</div>' : '') + '</div>';
+  })();
   $('#miniService').textContent = svc.running ? '服务中 :' + svc.port + ' · ' + (svc.requests || 0) + ' 次调用' : '服务已停止';
   $('#btnStart').disabled = !!svc.running;
   $('#btnStop').disabled = !svc.running;
@@ -265,6 +278,7 @@ function fillSettings(s) {
   $('#setThreads').value = s.threads;
   $('#setParallel').value = s.parallel;
   $('#setFa').checked = !!s.flashAttn;
+  $('#setMmprojGpu').checked = !!s.mmprojOnGpu;
   $('#setEnginePath').value = s.enginePath || '';
   $('#setEngineMirror').value = s.engineMirror || '';
   $('#setHf').value = s.hfEndpoint || '';
@@ -442,6 +456,7 @@ function collectSettings() {
     threads: parseInt($('#setThreads').value, 10) || 0,
     parallel: parseInt($('#setParallel').value, 10) || 1,
     flashAttn: $('#setFa').checked,
+    mmprojOnGpu: $('#setMmprojGpu').checked,
     enginePath: $('#setEnginePath').value.trim(),
     engineMirror: $('#setEngineMirror').value.trim(),
     hfEndpoint: $('#setHf').value.trim() || 'https://hf-mirror.com',
@@ -561,12 +576,16 @@ function renderModels() {
 
   wrap.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', async () => {
     const id = b.dataset.load;
+    if (S.loadingModel) { toast('正在加载 ' + S.loadingModel + '，等它完成（或先点「停止模型」）', 'error'); return; }
+    S.loadingModel = id;                 // 防重入：加载中再点别的「加载」直接拒绝（后端 _loadGate 会排队，但 UX 上静默排队让人困惑）
+    b.disabled = true;
     toast('开始加载 ' + id + ' …（看引擎日志）');
     try {
       const r = await call('load', { id });
       if (r && r.ok === false) toast(r.message || '加载失败', 'error');
       else toast('已加载 ' + id, 'ok');
     } catch (e) { toast(e.message, 'error'); }
+    finally { S.loadingModel = null; b.disabled = false; }
   }));
   wrap.querySelectorAll('[data-folder]').forEach((b) => b.addEventListener('click', () => call('openFolder', { path: b.dataset.folder })));
   wrap.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
@@ -1060,6 +1079,32 @@ function addLog(source, line) {
 
 /* ---------------- 绑定 ---------------- */
 function bind() {
+  /* 侧栏折叠：点击按钮切换，状态记 localStorage，下次打开保持 */
+  (function initSide() {
+    const side = $('#side'), btn = $('#btnSide');
+    if (!side || !btn) return;
+    if (localStorage.getItem('cnm.sideCollapsed') === '1') side.classList.add('collapsed');
+    const sync = () => {
+      const on = side.classList.contains('collapsed');
+      btn.textContent = on ? '' : '« 收起侧栏';   // 折叠态的 » 由 CSS ::before 画
+      btn.title = on ? '展开侧栏' : '折叠侧栏';
+      btn.setAttribute('aria-label', btn.title);
+    };
+    sync();
+    btn.addEventListener('click', () => {
+      side.classList.toggle('collapsed');
+      localStorage.setItem('cnm.sideCollapsed', side.classList.contains('collapsed') ? '1' : '0');
+      sync();
+    });
+  })();
+
+  /* 无系统标题栏：顶栏拖动（原生消息）+ 右上角窗口按钮 */
+  const winCall = (cmd) => { try { call(cmd).catch(() => { }); } catch (e) { } };
+  $('#btnMin')?.addEventListener('click', () => winCall('windowMinimize'));
+  $('#btnMax')?.addEventListener('click', () => winCall('windowMaximize'));
+  $('#btnClose')?.addEventListener('click', () => winCall('windowClose'));
+  $('#titlebarHit')?.addEventListener('click', () => { });
+
   $('#btnStart').addEventListener('click', async () => { const r = await call('startServer'); if (r && r.error) toast(r.error, 'error'); });
   $('#btnStop').addEventListener('click', () => call('stopServer'));
   $('#btnTheme').addEventListener('click', () => {
