@@ -99,6 +99,13 @@ public sealed class UsageStats
     private bool _dirty;
     private DateTime _lastSave = DateTime.MinValue;
 
+    /// <summary>
+    /// 第一次用上 CNM 的时间（也就是"装上那天"）。
+    /// 图表的起点用它 —— 以前写死"往前 5 年 / 12 个月"，刚装的用户会看到
+    /// 一排 2022、2023 的空柱子，除了占地方没有任何信息。
+    /// </summary>
+    public DateTime FirstSeen { get; private set; } = DateTime.Now;
+
     public static string FilePath => Path.Combine(Settings.DataDir, "usage.json");
 
     public UsageStats() { Load(); }
@@ -109,7 +116,13 @@ public sealed class UsageStats
         {
             if (!File.Exists(FilePath)) return;
             var o = JsonNode.Parse(File.ReadAllText(FilePath)) as JsonObject;
-            if (o?["days"] is not JsonObject days) return;
+            if (o == null) return;
+
+            // 起点优先读存盘的值（首次运行时写进去的那天）
+            if (o["firstSeen"]?.GetValue<string>() is string fs && DateTime.TryParse(fs, out var fd))
+                FirstSeen = fd;
+
+            if (o["days"] is not JsonObject days) return;
             lock (_lock)
             {
                 foreach (var kv in days)
@@ -126,6 +139,12 @@ public sealed class UsageStats
                         PromptTok = (long?)d["PromptTok"] ?? 0,
                         ComplTok = (long?)d["ComplTok"] ?? 0
                     };
+                }
+                // 老数据里没有 firstSeen：拿最早那天当起点（比"今天"更符合事实）
+                if (_days.Count > 0)
+                {
+                    var earliest = _days.Keys.Min(StringComparer.Ordinal);
+                    if (DateTime.TryParse(earliest, out var ed) && ed < FirstSeen) FirstSeen = ed;
                 }
             }
         }
@@ -157,7 +176,11 @@ public sealed class UsageStats
                 _dirty = false;
                 _lastSave = DateTime.Now;
             }
-            var root = new JsonObject { ["days"] = days };
+            var root = new JsonObject
+            {
+                ["firstSeen"] = FirstSeen.ToString("yyyy-MM-dd"),
+                ["days"] = days
+            };
             Directory.CreateDirectory(Settings.DataDir);
             File.WriteAllText(FilePath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
         }
@@ -216,10 +239,31 @@ public sealed class UsageStats
         ["ct"] = d.ComplTok
     };
 
-    /// <summary>给界面用的聚合：今天 / 本月 / 今年 / 累计 + 最近 7 天 / 12 个月 / 5 年</summary>
+    /// <summary>
+    /// 给界面用的聚合：今天 / 本月 / 今年 / 累计 + 日 / 月 / 年 三组柱子。
+    ///
+    /// 柱子只画「装上那天 → 今天」这一段，**装了几格就画几格**：
+    ///   10/18 装的，日=2 根（10/18、10/19）、月=1 根（10月）、年=1 根（2026）。
+    /// 以前写死往前 7 天 / 12 月 / 5 年，刚装的人会看到 10/13…10/17、2022…2025
+    /// 一大片**永远不会有数据**的空格子，纯占地方。
+    ///
+    /// 上限（7 / 12 / 5）只在"用得久"时才起作用 —— 那时候确实该只看最近一段。
+    /// </summary>
     public JsonObject Json()
     {
         var now = DateTime.Now;
+        var first = FirstSeen.Date > now.Date ? now.Date : FirstSeen.Date;
+
+        // 「装上到现在」各粒度跨几格（含首尾 +1）
+        int daySpan = (int)(now.Date - first.Date).TotalDays + 1;
+        int monthSpan = (now.Year - first.Year) * 12 + now.Month - first.Month + 1;
+        int yearSpan = now.Year - first.Year + 1;
+
+        // 只截上限，不抬下限 —— 装机头几天就该只有一两根柱子
+        int dayCount = Math.Clamp(daySpan, 1, 7);
+        int monthCount = Math.Clamp(monthSpan, 1, 12);
+        int yearCount = Math.Clamp(yearSpan, 1, 5);
+
         lock (_lock)
         {
             UsageDay Sum(Func<string, bool> pick)
@@ -248,15 +292,16 @@ public sealed class UsageStats
             var monthStart = new DateTime(now.Year, now.Month, 1);
             return new JsonObject
             {
+                ["firstSeen"] = first.ToString("yyyy-MM-dd"),
                 ["today"] = Day2Json(Sum(k => k == now.ToString("yyyy-MM-dd"))),
                 ["month"] = Day2Json(Sum(k => k.StartsWith(now.ToString("yyyy-MM"), StringComparison.Ordinal))),
                 ["year"] = Day2Json(Sum(k => k.StartsWith(now.ToString("yyyy"), StringComparison.Ordinal))),
                 ["total"] = Day2Json(Sum(_ => true)),
-                ["days"] = Series(7, i => now.AddDays(i - 6).Date,
+                ["days"] = Series(dayCount, i => now.AddDays(i - (dayCount - 1)).Date,
                                   d => d.ToString("yyyy-MM-dd"), d => d.ToString("M/d")),
-                ["months"] = Series(12, i => monthStart.AddMonths(i - 11),
+                ["months"] = Series(monthCount, i => monthStart.AddMonths(i - (monthCount - 1)),
                                     d => d.ToString("yyyy-MM"), d => d.ToString("M月")),
-                ["years"] = Series(5, i => new DateTime(now.Year - (4 - i), 1, 1),
+                ["years"] = Series(yearCount, i => new DateTime(now.Year - (yearCount - 1 - i), 1, 1),
                                    d => d.ToString("yyyy"), d => d.ToString("yyyy"))
             };
         }

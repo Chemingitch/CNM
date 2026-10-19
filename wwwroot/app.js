@@ -810,7 +810,8 @@ function renderUsage() {
   $('#usageHint').textContent = '累计 ' + fmtNum(tt.req) + ' 次（本地 ' + fmtNum(tt.local) + ' / 外地 ' + fmtNum(tt.up) + '）' +
     ((((tt.pt || 0) + (tt.ct || 0)) > 0) ? ' · token 输入 ' + fmtNum(tt.pt) + ' / 输出 ' + fmtNum(tt.ct) : '') +
     ' · 回传 ' + fmtBytes(tt.bytes) +
-    '　｜　只算 chat/completions 这类真干活的请求（模型列表、探活不算），数字存在 %APPDATA%\\CNM\\usage.json；柱子颜色：下=本地、上=外地。';
+    (u.firstSeen ? '　｜　从 ' + u.firstSeen + ' 开始记（图表的月份/年份只画到这天为止）' : '') +
+    '；只算 chat/completions 这类真干活的请求（模型列表、探活不算），数字存在 %APPDATA%\\CNM\\usage.json；柱子颜色：下=本地、上=外地。';
 
   renderUsageGlance(t, series, name);
 }
