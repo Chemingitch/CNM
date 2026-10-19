@@ -519,7 +519,18 @@ input[type=number].input { text-align: right; }
 #view-models { overflow: hidden; }
 #view-models > .row, #view-models > .hero { flex: 0 0 auto; }
 #paneLocal, #paneRemote { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
-#paneRemote > .row:first-child { position: sticky; top: 0; z-index: 2; background: var(--bg); padding-bottom: 6px; }
+/* 外地那一页的摘要是粘性表头（滚动时钉在顶部）。
+   ⚠️ 原来给它铺了一整条 background: var(--bg) —— 在深色主题下就是一条
+      横贯整个宽度、圆角为 0 的黑条（用户截图里框出来的那个）。
+   现在只让「外地」胶囊和摘要各自带圆角浅底，整行不再铺背景；
+   粘性仍需一个不透明底，所以用"只包住内容的底"：见下面 .row 的 ::before。 */
+#paneRemote > .row:first-child {
+  position: sticky; top: 0; z-index: 2;
+  background: transparent;
+  padding: 2px 0 8px;
+  width: fit-content;          /* 只占内容宽度，不再横贯整行 */
+  max-width: 100%;
+}
 #usagePanel {
   flex: 0 0 auto; margin-top: 0; position: relative;
   border-color: var(--line2);
@@ -710,3 +721,426 @@ html[data-theme="light"] #usagePanel { box-shadow: 0 -10px 24px rgba(20,30,60,.1
 /* 折叠动画改由外层容器的高度过渡承担（不再依赖固定 max-height） */
 .usage { transition: none; }
 .usage-glance { transition: opacity .18s ease; }
+/* ═══════════════════════════════════════════════════════════════
+   通用 ⓘ 悬停提示
+   界面上不再常驻大段说明文字（占地、每次都被迫重读），
+   收敛成一个 ⓘ 图标，鼠标停上去才展开。放在 .panel-head 里紧跟标题。
+   ═══════════════════════════════════════════════════════════════ */
+.tip { position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; flex: 0 0 auto;
+  border: 1px solid var(--line2); color: var(--muted); font-size: 10px; font-weight: 600;
+  line-height: 1; cursor: help; user-select: none; transition: color .15s, border-color .15s; }
+.tip:hover { color: var(--text); border-color: var(--accent); }
+
+/* 气泡：默认朝下展开（标题在面板顶部，朝上会顶出面板外）。
+   宽一点、允许换行 —— 这些说明本来就有好几句话。 */
+.tip::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%) translateY(-4px);
+  width: max-content; max-width: 460px;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line2);
+  border-radius: 9px; padding: 8px 11px; font-size: 11.5px; font-weight: 400;
+  line-height: 1.65; white-space: normal; text-align: left; z-index: 80;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  box-shadow: 0 10px 26px rgba(0,0,0,.42);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+}
+.tip:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+/* 靠右的 ⓘ 气泡往右收，避免超出面板右边 */
+.tip.rt::after { left: auto; right: 0; transform: translateX(0) translateY(-4px); }
+.tip.rt:hover::after { transform: translateX(0) translateY(0); }
+/* 气泡里的强调与代码：沿用正文配色，但不要撑破宽度 */
+.tip::after b { color: var(--text); font-weight: 600; }
+.tip::after code { background: var(--line); padding: 1px 4px; border-radius: 4px;
+  font-size: 11px; word-break: break-all; }
+/* 气泡宽度收一档：420px 在窄面板里居中弹会探出去，收到 360px 并允许随视口缩 */
+.tip::after { max-width: min(360px, 38vw); }
+/* ── ⓘ 气泡定位定稿（取代上面那版几何规则）──
+   实测三种位置都要照顾：面板左侧的 ⓘ 居中弹会向左溢出（文字被切），
+   右侧的会向右溢出。所以：
+     · 默认 = 左对齐、向右展开（瓶口对齐 ⓘ 左边）—— 适合面板左半边的 ⓘ
+     · .rt  = 右对齐、向左展开                       —— 适合面板右半边 / 行尾的 ⓘ
+   宽度也收到 360px：再宽在窄面板里就必然探出去。 */
+.tip::after {
+  left: 0; right: auto;
+  transform: translateY(-4px);
+}
+.tip:hover::after { transform: translateY(0); }
+.tip.rt::after { left: auto; right: 0; transform: translateY(-4px); }
+.tip.rt:hover::after { transform: translateY(0); }
+/* ═══════════════════════════════════════════════════════════════
+   推理参数：渐变滑条
+   ═══════════════════════════════════════════════════════════════ */
+.kv .slider {
+  -webkit-appearance: none; appearance: none;
+  flex: 1 1 200px; min-width: 140px; max-width: 340px; height: 6px;
+  border-radius: 999px; outline: none; cursor: pointer;
+  /* 已填充部分走主题渐变，未填充部分是暗轨色 —— --fill 由 JS 实时写入 */
+  background: linear-gradient(90deg, var(--accent), var(--accent2)) 0/var(--fill, 0%) 100% no-repeat,
+              var(--line);
+  transition: background-size .12s ease;
+}
+.kv .slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  cursor: grab; transition: transform .14s ease, border-color .14s ease;
+}
+.kv .slider::-webkit-slider-thumb:hover { transform: scale(1.16); border-color: var(--accent2); }
+.kv .slider:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.06); }
+.kv .slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); cursor: grab;
+}
+.kv .input.num { max-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ═══════════════════════════════════════════════════════════════
+   所有切换都加过渡：日月年 / 本地外地 / tabs / 开关 / 按钮状态
+   （原来是硬切，看着跳）
+   ═══════════════════════════════════════════════════════════════ */
+.seg-btn, .btn, .switch span, .tab, .modelTabs .seg-btn {
+  transition: background .18s ease, color .18s ease, border-color .18s ease,
+              box-shadow .18s ease, opacity .18s ease, transform .12s ease;
+}
+/* 用量面板：折叠 ⇄ 展开、切日/月/年 时的淡入 */
+.usage-glance, .usage-full { transition: max-height .3s cubic-bezier(.4,0,.2,1),
+  opacity .22s ease, margin .3s ease, transform .22s ease; }
+.usage-full { transform: translateY(-4px); }
+.usage.expanded .usage-full { transform: translateY(0); }
+#usageChart, #ugSpark, #usageCols { transition: opacity .22s ease; }
+#usageTotals, #usageHint { transition: opacity .2s ease; }
+/* 视图切换（侧栏各页）时淡入，不要硬闪 */
+.view { transition: opacity .2s ease; }
+.view.hidden { opacity: 0; }
+.view:not(.hidden) { opacity: 1; }
+/* 卡片 / 面板的选中态也过渡 */
+.model-card, .panel, .up-item { transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+/* ═══════════════════════════════════════════════════════════════
+   ⓘ 气泡：不再被面板 / 滚动容器裁掉
+   ═══════════════════════════════════════════════════════════════
+   问题：.view 是 overflow:auto、main 是 overflow:hidden，
+   气泡一旦超出面板边界就被裁（用户实测到文字被切）。
+   做法：气泡改成 position:fixed，脱离所有滚动/裁剪容器；
+   位置由 JS 按 ⓘ 的实际坐标算（见 app.js 的 placeTip）。 */
+.tip::after {
+  position: fixed;
+  left: auto; right: auto; top: auto; bottom: auto;
+  z-index: 200;
+  transform: translateY(-3px);
+}
+.tip:hover::after { transform: translateY(0); }
+/* 用 JS 给坐标前先藏起来，避免第一帧闪一下 */
+.tip:not(.placed)::after { opacity: 0 !important; visibility: hidden !important; }
+
+/* ── 快捷键状态灯：悬停出小气泡（把失败原因显示出来）──
+   原来只有颜色、没有解释；灰灯时用户看不出为什么。 */
+.hk-led { position: relative; }
+.hk-led::after {
+  content: attr(data-tip);
+  position: fixed; left: auto; right: auto; top: auto; bottom: auto;
+  width: max-content; max-width: 300px;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line2);
+  border-radius: 8px; padding: 5px 9px; font-size: 11px; line-height: 1.6;
+  white-space: normal; z-index: 200;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  box-shadow: 0 8px 20px rgba(0,0,0,.42);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+  transform: translateY(-3px);
+}
+.hk-led[data-tip]:not([data-tip=""])::after { content: attr(data-tip); }
+.hk-led:hover::after { opacity: 1; visibility: visible; transform: translateY(0); }
+.hk-led:not(.placed)::after { opacity: 0 !important; visibility: hidden !important; }
+/* ── 气泡用 JS 算好的坐标（--tip-x / --tip-y 由 placeTip 写入）──
+   覆盖上面几版靠 CSS 相对对齐的规则：nowrap 的定长气泡在 fixed 定位下
+   没法用 left/right 表达，只能吃绝对坐标。 */
+.tip::after, .hk-led::after {
+  left: var(--tip-x, 0px) !important;
+  top: var(--tip-y, 0px) !important;
+  right: auto !important;
+  bottom: auto !important;
+}
+/* ── 推理参数行：数字框居中、右侧只留一个动态换算 ──
+   截图反馈：数字偏在框左边、说明文字太长抢位置。
+   数字框改成居中（数字是输入框，用 text-align:center），
+   行内说明全部收进面板标题的 ⓘ，只留上下文长度那个动态换算。 */
+.kv .input.num {
+  max-width: 92px; flex: 0 0 92px;
+  text-align: center;                 /* ← 数字居中（原来是 right，看着偏） */
+  font-variant-numeric: tabular-nums;
+  padding-left: 6px; padding-right: 6px;   /* 给数字选择器箭头留点位置 */
+}
+#setCtxUnit { min-width: 52px; }
+/* ═══════════════════════════════════════════════════════════════
+   滑条：颜色随「吃配置程度」变化 + 拖动跟随气泡
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 用 --c1/--c2 两个变量当渐变两端，按 data-level 换色。
+   左端轻松（青绿→蓝）→ 中间主题蓝紫 → 右端吃紧（橙→红）。 */
+.kv .slider { --c1: #35c98a; --c2: #5b8cff; }
+.kv .slider[data-level="1"] { --c1: #5b8cff; --c2: #8a5cff; }
+.kv .slider[data-level="2"] { --c1: #8a5cff; --c2: #b06cff; }
+.kv .slider[data-level="3"] { --c1: #ffb347; --c2: #e5484d; }
+.kv .slider {
+  background: linear-gradient(90deg, var(--c1), var(--c2)) 0/var(--fill, 0%) 100% no-repeat,
+              var(--line);
+}
+/* 滑块边框跟着渐变尾色走，看颜色就知道拉多狠了 */
+.kv .slider[data-level="0"]::-webkit-slider-thumb { border-color: #5b8cff; }
+.kv .slider[data-level="1"]::-webkit-slider-thumb { border-color: #8a5cff; }
+.kv .slider[data-level="2"]::-webkit-slider-thumb { border-color: #b06cff; }
+.kv .slider[data-level="3"]::-webkit-slider-thumb { border-color: #e5484d; }
+.kv .slider[data-level="3"] { box-shadow: 0 0 0 3px rgba(229,72,77,.14); }
+
+/* 拖动时跟随鼠标的小气泡：显示当前值，松手 1.2 秒后淡出 */
+.slider-bubble {
+  position: fixed; transform: translate(-50%, -100%);
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line2); border-radius: 8px;
+  padding: 3px 8px; font-size: 11px; font-weight: 600;
+  white-space: nowrap; pointer-events: none; z-index: 210;
+  box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  opacity: 0; visibility: hidden;
+  transition: opacity .16s ease, transform .16s ease, visibility .16s;
+}
+.slider-bubble.on { opacity: 1; visibility: visible; transform: translate(-50%, calc(-100% - 4px)); }
+/* 小尖角 */
+.slider-bubble::after {
+  content: ''; position: absolute; left: 50%; top: 100%;
+  transform: translateX(-50%); border: 5px solid transparent;
+  border-top-color: var(--line2);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   日 / 月 / 年 切换：补上淡入 + 轻推
+   （之前只加了 .seg-btn 的颜色过渡，内容切换仍是硬切）
+   ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   快捷键指示灯的气泡：回到相对定位（不要 position:fixed）
+   ═══════════════════════════════════════════════════════════════
+   上一版把灯也改成 fixed + JS 坐标，结果悬停什么都不显示：
+   灯的 data-tip 是渲染时才写入的，placeTip 拿不到；而且 CSS 变量
+   在伪元素里未必解析。灯就一个小圆点、独占一行右侧，空间足够，
+   用相对定位最稳（气泡向上弹，不会被面板裁 —— 灯上方是空的）。 */
+.hk-led::after {
+  position: absolute !important;
+  left: 50% !important; right: auto !important;
+  top: auto !important;
+  bottom: calc(100% + 8px) !important;
+  transform: translateX(-50%) translateY(3px) !important;
+  width: max-content; max-width: 280px;
+  white-space: normal; text-align: left; z-index: 220;
+}
+.hk-led:hover::after { transform: translateX(-50%) translateY(0) !important; }
+/* 取消 JS 坐标对灯的影响（灯不吃 --tip-x/y） */
+.hk-led { --tip-x: 0; --tip-y: 0; }
+/* ═══════════════════════════════════════════════════════════════
+   折叠态 / 展开态：物理互斥（修「日月年切换重影」的真因）
+   ═══════════════════════════════════════════════════════════════
+   之前我为了让折叠行不被 90px 的 max-height 裁掉，把 .usage-glance 的
+   overflow 改成了 visible。但展开态的规则是靠「max-height:0」收起的 ——
+   max-height 只在 overflow:hidden 时才真的裁内容，overflow:visible 之后
+   高度是 0、内容却照样溢出显示，于是折叠行和展开内容叠在一起（重影）。
+   正确做法：展开态显式用 overflow:hidden + 不可见，折叠态才放开。 */
+.usage.expanded .usage-glance {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  visibility: hidden;
+  margin-bottom: -6px;
+  pointer-events: none;
+}
+/* 折叠态：内容要完整撑开，所以放开高度限制 */
+.usage:not(.expanded) .usage-glance {
+  max-height: none;
+  overflow: visible;
+  opacity: 1;
+  visibility: visible;
+}
+/* 展开态的内容容器也要能正常裁（避免长图把面板撑破） */
+.usage.expanded .usage-full { overflow: hidden; }
+
+/* ═══════════════════════════════════════════════════════════════
+   日 / 月 / 年 切换过渡（唯一一套，别再加第二套）
+   ═══════════════════════════════════════════════════════════════
+   之前有三套 .usage.swap 规则叠在一起（分几次迭代加的），!important 与
+   普通声明混用，过渡行为不可预测 —— 实测淡出能走、淡入卡在 .12 回不来。
+
+   现在只有两条，都是普通声明、不带 !important：
+     · 基础态 = 终值（opacity 1）+ 淡入曲线
+     · .swap 态 = 起始值（opacity .12）+ 淡出曲线
+   切换类名即触发插值，进出都看得见。
+   ⚠️ 别再往这里加第三条：重叠的规则会让过渡要么不跑、要么跳变。 */
+.usage-fade {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition: opacity .26s cubic-bezier(.22,.61,.36,1),
+              transform .26s cubic-bezier(.22,.61,.36,1);
+}
+.usage.swap .usage-fade {
+  opacity: .12;
+  transform: translateY(-4px) scale(.985);
+  transition: opacity .13s ease-in, transform .13s ease-in;
+}
+/* 分段按钮按下时轻微回弹 */
+.seg-btn:active { transform: scale(.96); }
+
+
+/* ═══════════════════════════════════════════════════════════════
+   下拉框：自绘弹层（原生 select 弹层治不了）
+   ═══════════════════════════════════════════════════════════════
+   原生 <select> 的弹层是浏览器独立绘制的窗口：
+     · border-radius 完全无效（永远是硬直角）
+     · option 的背景色只能部分影响，选中项恒为系统浅灰
+   CSS 无论怎么写都改不动它。所以保留原生 select 当数据源
+   （JS 的 .value / .selectedIndex 全兼容，一行不用改），
+   在它旁边浮一个自绘的下拉面板，点开显示的是我们自己画的那一层。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 触发器：把原生 select 隐掉但保留可访问性（仍在 DOM 里、仍能取值） */
+select.input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+
+/* 自绘的按钮（显示当前值） */
+.dd {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 9px; padding: 7px 11px; font: inherit; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s; user-select: none;
+}
+.dd:hover { border-color: var(--line2); }
+.dd.open, .dd:focus-visible {
+  border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,140,255,.14); outline: none;
+}
+.dd-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-a { flex: 0 0 auto; width: 12px; height: 8px; color: var(--muted); transition: transform .18s ease; }
+.dd.open .dd-a { transform: rotate(180deg); }
+.dd[disabled] { opacity: .5; cursor: default; }
+
+/* 弹层：圆角 + 主题色 + 淡入，全部自己画 */
+.dd-pop {
+  position: fixed; z-index: 260;
+  min-width: 120px; max-height: 300px; overflow-y: auto;
+  background: var(--panel2); border: 1px solid var(--line2);
+  border-radius: 10px; padding: 5px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  opacity: 0; visibility: hidden; transform: translateY(-6px) scale(.98);
+  transform-origin: top center;
+  transition: opacity .15s ease, transform .15s ease, visibility .15s;
+}
+.dd-pop.open { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+.dd-i {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 9px; border-radius: 7px; cursor: pointer;
+  color: var(--text); font-size: 12.5px; white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+.dd-i:hover { background: var(--line); }
+.dd-i.on { background: var(--accent); color: #fff; font-weight: 600; }
+.dd-i.on::after { content: '✓'; margin-left: auto; font-size: 11px; }
+/* 滚动条也走主题（弹层里的） */
+.dd-pop::-webkit-scrollbar { width: 8px; }
+.dd-pop::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 8px; }
+.dd-pop::-webkit-scrollbar-track { background: transparent; }
+/* ── 下拉弹层被挡的修复 ──
+   .dd-pop 是 position:fixed + z-index:260，按理不会被裁。
+   但它在 WebView2 里被后面的内容盖住了：因为 .card / .panel 这些祖先带
+   transition 和 :hover{transform}，**transform 会创建新的层叠上下文**，
+   把 fixed 子元素困在里面，z-index 再大也出不去。
+   对策：弹层挂到 body 下（JS 已经这么做）之外，再显式抬高层叠：
+     · 给弹层加 will-change / isolation:isolate，让它自成一层
+     · 面板 / 卡片不要创建多余的层叠上下文 */
+.dd-pop {
+  z-index: 9999 !important;
+  isolation: isolate;
+  will-change: transform, opacity;
+}
+/* 面板与卡片在悬停时不要用 transform 抬升 —— 它会吃掉弹层的层级。
+   改成用边框和阴影表达悬停，视觉差别很小，但层叠不再打架。 */
+.card:hover { transform: none; border-color: #39445a; box-shadow: 0 4px 14px rgba(0,0,0,.22); }
+.panel:hover { transform: none; }
+/* 面板本身也别建层叠上下文 */
+.panel, .card { isolation: auto; }
+/* ── 自绘下拉框：让原生 select 完全不占布局 ──
+   上一版把它设成 position:absolute + width/height 1px，
+   但它仍在 flex 流里占了一个位（截图里表现为按钮下面还叠着一层）。
+   改成 display:none 就会失去键盘可访问性；用 clip 方案最干净：
+   保留在 DOM、可聚焦、可取 .value，但零占位、零可见。 */
+select.input {
+  position: absolute !important;
+  width: 1px !important; height: 1px !important;
+  margin: -1px !important; padding: 0 !important; border: 0 !important;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  overflow: hidden; white-space: nowrap;
+  opacity: 0; pointer-events: none;
+}
+/* 自绘触发器接管原有的宽度约束 */
+.dd { max-width: 100%; }
+/* ── 下拉弹层：朝下 / 朝上两种方向 ──
+   之前 place() 量高度时机不对，误判"下方放不下"就翻到上方，盖住了上面的文字。
+   现在 JS 明确用 .up 表达方向，并用 transform 定位；CSS 只管动画方向。 */
+.dd-pop.up { transform-origin: bottom center; }
+.dd-pop { transform-origin: top center; }
+/* 开场动画：朝下时从上往下滑入，朝上时从下往上滑入 */
+.dd-pop:not(.open) { transform: translateY(-6px) scale(.98); }
+.dd-pop.up:not(.open) { transform: translateY(6px) translateY(0) scale(.98); }
+.dd-pop.open { transform: none; }
+/* ── 下拉弹层方向 ──
+   JS 用 .up 类 + top/bottom 定位表达方向（不碰 transform，避免跟过渡打架）。
+   这里只定 transform-origin，让展开动画从正确的那条边开始。 */
+.dd-pop { transform-origin: top center; }
+.dd-pop.up { transform-origin: bottom center; }
+/* ── 下拉弹层：内容不再被横向裁掉 ──
+   现象：选中项右边的 ✓ 和较长文字被切掉。
+   原因：.dd-pop 设了 overflow-y:auto —— CSS 规定「一个轴是 auto 时，
+        另一个轴的 visible 会被强制当成 auto」，于是 overflow-x 也变成 auto，
+        内容比弹层宽就被裁。
+   修法：宽度改成「按内容撑开」（width:max-content），并给选中项留出 ✓ 的位。 */
+.dd-pop {
+  width: max-content;          /* 由最宽的那一项决定宽度，不会横向裁内容 */
+  min-width: 120px;
+  max-width: 420px;            /* 超长选项才截，正常项都完整显示 */
+}
+.dd-i {
+  padding-right: 9px;
+  min-width: 0;
+}
+/* 选中项要额外留出 ✓ 的位置，否则 ✓ 会把文字挤出可视区 */
+.dd-i.on { padding-right: 26px; }
+.dd-i.on::after { position: absolute; right: 9px; }
+.dd-i { position: relative; }
+/* ═══════════════════════════════════════════════════════════════
+   自绘悬停提示（单例浮层）
+   ═══════════════════════════════════════════════════════════════
+   为什么不用原生 title：那个提示框是操作系统画的，
+   永远是黑色直角硬框，跟主题完全不搭（用户截图里那个方框就是它）。
+   这里用一个 body 下的单例浮层替它：圆角、主题色、能夹在视口内。
+   任何元素都能用 —— JS 侧调 tipify(el, '文字') 即可。 */
+.tipbox {
+  position: fixed; z-index: 9998;
+  max-width: min(420px, 46vw);
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line2); border-radius: 9px;
+  padding: 7px 10px; font-size: 11.5px; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word; text-align: left;
+  box-shadow: 0 10px 28px rgba(0,0,0,.45);
+  pointer-events: none;
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+}
+.tipbox.on { opacity: 1; visibility: visible; transform: translateY(0); }
+/* ── 外地那一页的摘要行：圆角浅底，和左边「外地」胶囊对齐 ──
+   原来整行铺 background: var(--bg)，在深色主题下就是一条横贯宽度、
+   圆角为 0 的黑条。现在整行不铺背景，「外地」胶囊和摘要各带圆角底，
+   两者同高、间距一致，看起来是一组。 */
+#paneRemote > .row:first-child { align-items: center; gap: 8px; }
+#remoteSummary {
+  display: inline-flex; align-items: center;
+  min-height: 22px; padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+/* 胶囊和摘要同高，看着才是一排 */
+#paneRemote > .row:first-child .badge { min-height: 22px; }

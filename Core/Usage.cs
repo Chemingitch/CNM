@@ -311,7 +311,21 @@ public sealed class UsageStats
                 {
                     var d = at(i);
                     var k = key(d);
-                    var day = _days.TryGetValue(k, out var v) ? v : new UsageDay();
+                    // ⚠️ 不能精确查 _days：那里的键是完整日期（2026-10-18），
+                    //    而月 / 年序列的键是 2026-10 / 2026 —— TryGetValue 必然落空，
+                    //    于是月、年柱子全是 0（而汇总数字又是对的，很难看出问题）。
+                    //    日序列恰好键格式一致，所以一直没暴露这个 bug。
+                    //    正确做法：按前缀把该区间里的每一天合起来。
+                    var day = new UsageDay();
+                    foreach (var kv in _days)
+                    {
+                        if (!kv.Key.StartsWith(k, StringComparison.Ordinal)) continue;
+                        var x = kv.Value;
+                        day.Req += x.Req; day.Local += x.Local; day.Up += x.Up;
+                        day.Fail += x.Fail; day.FailLocal += x.FailLocal; day.FailUp += x.FailUp;
+                        day.Bytes += x.Bytes; day.Ms += x.Ms;
+                        day.PromptTok += x.PromptTok; day.ComplTok += x.ComplTok;
+                    }
                     var o = Day2Json(day);
                     o["k"] = k;
                     o["l"] = label(d);

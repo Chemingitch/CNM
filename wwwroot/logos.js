@@ -125,7 +125,9 @@
     } else {
       tile = '<span class="lg' + (cls ? ' lg-' + cls : '') + '" style="background:' + lab.bg + '">' + esc(lab.mark) + '</span>';
     }
-    return '<span class="lgb" title="' + esc(lab.name) + '">' + tile +
+    // 用 data-tip 而不是 title：title 弹的是系统黑色直角硬框，跟主题不搭。
+    // 自绘提示由 app.js 的 initTips()（含 MutationObserver 兜底）接上。
+    return '<span class="lgb" data-tip="' + esc(lab.name) + '">' + tile +
            (cn ? '<span class="lgb-cn">' + esc(cn) + '</span>' : '') + '</span>';
   }
 

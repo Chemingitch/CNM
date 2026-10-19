@@ -43,7 +43,7 @@
         <div class="mini-tip" id="miniTip"></div>
       </div>
       <div class="mini sub" id="miniService">服务已停止</div>
-      <button id="btnSide" class="side-toggle" title="折叠侧栏" aria-label="折叠侧栏">« 收起侧栏</button>
+      <button id="btnSide" class="side-toggle" data-tip="折叠侧栏" aria-label="折叠侧栏">« 收起侧栏</button>
     </div>
   </aside>
 
@@ -54,11 +54,11 @@
       <div class="grow"></div>
       <button class="btn primary" id="btnStart">启动服务</button>
       <button class="btn" id="btnStop">停止</button>
-      <button class="btn ghost" id="btnTheme" title="切换主题">◐</button>
+      <button class="btn ghost" id="btnTheme" data-tip="切换主题">◐</button>
       <div class="win-btns">
-        <button id="btnMin" title="最小化">&#x2013;</button>
-        <button id="btnMax" title="最大化/还原">&#x25A1;</button>
-        <button id="btnClose" title="关闭">&#x00D7;</button>
+        <button id="btnMin" data-tip="最小化">&#x2013;</button>
+        <button id="btnMax" data-tip="最大化 / 还原">&#x25A1;</button>
+        <button id="btnClose" data-tip="关闭">&#x00D7;</button>
       </div>
     </header>
 
@@ -98,7 +98,7 @@
           <option value="recent">最近用过</option>
           <option value="speed">按速度（快→慢）</option>
         </select>
-        <button class="btn" id="btnPingAll" title="给这条上游的所有模型各发一次最小请求，量首字延迟（会消耗少量额度）">全部测速</button>
+        <button class="btn" id="btnPingAll" data-tip="给这条上游的所有模型各发一次最小请求，量首字延迟（会消耗少量额度）">全部测速</button>
         <button class="btn" id="btnRemoteRefresh">重新连接</button>
         <button class="btn ghost" id="btnRemoteToWatch">去守望者</button>
       </div>
@@ -131,18 +131,18 @@
       <div class="panel usage collapsed" id="usagePanel">
         <div class="panel-head usage-head" id="usageHead">
           <b>用量</b>
-          <span class="muted small">所有 agent 调进来算的账（只记数字，不记对话内容）</span>
+          <span class="tip rt" data-tip="所有 agent 调进来算的账：只记数字（次数 / token / 耗时 / 回传字节），不记对话内容。只算 chat/completions 这类真干活的请求，模型列表和探活不算；数字存在 %APPDATA%\CNM\usage.json。">i</span>
           <span class="grow"></span>
           <div class="seg" id="usageTabs">
             <button class="seg-btn on" data-utab="day">日</button>
             <button class="seg-btn" data-utab="month">月</button>
             <button class="seg-btn" data-utab="year">年</button>
           </div>
-          <button class="btn tiny ghost usage-toggle" id="btnUsageToggle" title="展开 / 收起仪表盘">展开 ▾</button>
+          <button class="btn tiny ghost usage-toggle" id="btnUsageToggle" data-tip="展开 / 收起仪表盘">展开 ▾</button>
         </div>
 
         <!-- 折叠态：一眼看关键数字（点整条也能展开） -->
-        <div class="usage-glance" id="usageGlance" title="点这里展开完整仪表盘">
+        <div class="usage-glance" id="usageGlance" data-tip="点这里展开完整仪表盘">
           <div class="ug-item">
             <div class="ug-num" id="ugReq">—</div>
             <div class="ug-lab" id="ugReqLab">次调用</div>
@@ -231,26 +231,23 @@
     <section class="view hidden" id="view-service">
       <div class="grid2">
         <div class="panel">
-          <div class="panel-head"><b>哨兵</b><span class="muted small">对内 · 别人连进来的那道门</span></div>
+          <div class="panel-head"><b>哨兵</b><span class="muted small">对内 · 别人连进来的那道门</span><span class="grow"></span>
+            <span class="tip rt" data-tip="给别的 agent（Cline / Continue / Cherry Studio / open-webui / 自己的脚本）就填两样：地址填面板里的 Base URL，Key 填 API Key。下面那行 curl 可以直接粘贴自测。">i</span>
+          </div>
           <div class="kv"><label>Base URL</label><code id="svcBase">—</code><button class="btn tiny" data-copy="svcBase">复制</button><button class="btn tiny" id="btnOpenApi">浏览器打开</button></div>
           <div class="kv"><label>API Key</label><code id="svcKey">—</code><button class="btn tiny" data-copy="svcKey">复制</button><button class="btn tiny" id="btnNewKey">换一个</button></div>
           <div class="kv"><label>监听范围</label><span id="svcLan" class="muted">—</span></div>
           <div class="kv"><label>运行模型</label><span id="svcModel" class="muted">—</span></div>
           <div class="kv"><label>请求统计</label><span id="svcStats" class="muted">—</span></div>
-          <div class="hint">
-            给别的 agent（Cline / Continue / Cherry Studio / open-webui / 自己的脚本）就填两样：<br>
-            地址填上面的 <b>Base URL</b>，Key 填上面的 <b>API Key</b>。<br>
-            自测一行（<button class="btn tiny" data-copy="svcCurl">复制</button>）：
-            <code id="svcCurl">—</code>
-          </div>
-          <div class="hint">
-            本机的 GGUF 从这里出去：兼容 <code>/v1/models</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/embeddings</code>；
-            请求里 <code>model</code> 填 <b>/v1/models</b> 列出的 Id。开了「按请求自动加载模型」，要哪个模型就自动换哪个。
+          <div class="kv"><label>自测一行</label><code id="svcCurl">—</code><button class="btn tiny" data-copy="svcCurl">复制</button>
+            <span class="tip rt" data-tip="本机的 GGUF 从这里出去：兼容 /v1/models、/v1/chat/completions、/v1/completions、/v1/embeddings。请求里的 model 填 /v1/models 列出的 Id；开了「按请求自动加载模型」时，要哪个模型就自动换哪个。">i</span>
           </div>
         </div>
 
         <div class="panel">
-          <div class="panel-head"><b>守望者</b><span class="muted small">对外 · 连你买的那些云</span><span class="grow"></span><button class="btn tiny" id="btnRefreshUp">全部重连</button></div>
+          <div class="panel-head"><b>守望者</b><span class="muted small">对外 · 连你买的那些云</span><span class="grow"></span><button class="btn tiny" id="btnRefreshUp">全部重连</button>
+            <span class="tip rt" data-tip="这里只填中转站的地址和 Key（点「测试」能列出模型就是通了）。模型在「模型库 → 外地模型」里挑，点「接入」= 设成兜底模型：agent 写别的外地模型名照样用它自己，写不认识的名字才落到这个。&#10;&#10;代理那格填 auto（或点「自动检测」）就不用自己猜：CNM 先单独试直连（能通就用，最快最稳），直连不行才并发试「系统代理 / 本机常见端口」，谁通用谁并记住。也可写死 http://127.0.0.1:7890、socks5://127.0.0.1:1080、system、direct。本机库里的 GGUF 仍优先走本地引擎。">i</span>
+          </div>
           <div id="upList"></div>
           <div class="row">
             <button class="btn ghost tiny" id="btnAddUp">+ 添加上游</button>
@@ -266,13 +263,6 @@
             <option value="http://127.0.0.1:10809">v2rayN（http）</option>
             <option value="socks5://127.0.0.1:1080">socks5 常用</option>
           </datalist>
-          <div class="hint">
-            这里只填中转站的地址和 Key（点「测试」能列出模型就是通了）；<b>模型在「模型库 → 外地模型」里挑</b>，
-            点「接入」就是把它设成<b>兜底模型</b>：agent 里写别的外地模型名照样用它自己，写不认识的名字才落到这个。<br>
-            代理那格填 <b>auto</b>（或点「自动检测」）就不用自己猜了：CNM 先单独试<b>直连</b>（能通就用它，最快最稳），
-            直连不行才并发试「系统代理 / 本机常见端口」，谁通用谁并记住它。写死也行：<code>http://127.0.0.1:7890</code>、<code>socks5://127.0.0.1:1080</code>、<code>system</code>、<code>direct</code>。
-            本机库里的 GGUF 仍然优先走本地引擎。
-          </div>
         </div>
       </div>
 
@@ -297,14 +287,11 @@
       <div class="panel">
         <div class="panel-head">
           <b>模型目录</b>
+          <span class="tip" data-tip="GGUF 放在主目录或任意附加目录下都会被扫到（子目录也认）。点「选择目录…」直接挑，选完自动保存并重新扫描；手填路径的话，改完按页面最下面的「保存设置」，它会一起重新扫描。">i</span>
           <span class="muted small grow" id="setDirtyHint" style="text-align:right"></span>
         </div>
         <div class="kv"><label>主目录</label><input class="input grow" id="setModelsDir"><button class="btn ghost tiny" id="btnPickModelsDir">选择目录…</button></div>
         <div class="kv"><label>附加目录</label><input class="input grow" id="setExtraDirs" placeholder="多个目录用 ; 分隔，可留空"><button class="btn ghost tiny" id="btnPickExtraDir">追加目录…</button></div>
-        <div class="hint">
-          GGUF 放在模型的<b>主目录</b>或任意<b>附加目录</b>下都会被扫到（子目录也认）。
-          点「选择目录…」直接挑（选完自动保存并重新扫描）；手填路径的话，改完按页面最下面的「保存设置」，它会一起重新扫描。
-        </div>
       </div>
 
       <div class="panel">
@@ -314,7 +301,7 @@
         <div class="kv"><label>API Key</label><input class="input grow" id="setKey"></div>
         <div class="kv"><label>开机自动开服务</label><label class="switch"><input type="checkbox" id="setAutoStart"><span></span></label></div>
         <div class="kv"><label>模型列表也要 Key</label><label class="switch"><input type="checkbox" id="setModelsKey"><span></span></label>
-          <span class="muted small">开着：<code>/v1/models</code> 不带 key 也是 401</span></div>
+          <span class="tip rt" data-tip="开着时，连 /v1/models 也要带 API Key，不带就返回 401。关掉则列表接口可匿名访问（方便别人先看看有什么模型）。">i</span></div>
         <div class="kv"><label>按请求自动加载模型</label><label class="switch"><input type="checkbox" id="setAutoLoad"><span></span></label></div>
         <div class="kv"><label>启动时加载上次的模型</label><label class="switch"><input type="checkbox" id="setAutoLast"><span></span></label></div>
         <div class="kv"><label>空闲自动卸载</label><select class="input" style="max-width:150px" id="setIdle">
@@ -328,14 +315,33 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head"><b>推理参数</b></div>
-        <div class="kv"><label>上下文长度</label><input class="input" style="max-width:140px" id="setCtx" type="number" step="512"><span class="muted small">越大越吃显存</span></div>
-        <div class="kv"><label>GPU 层数</label><input class="input" style="max-width:140px" id="setNgl" type="number"><span class="muted small">99 = 全部丢显卡</span></div>
-        <div class="kv"><label>CPU 线程</label><input class="input" style="max-width:140px" id="setThreads" type="number"><span class="muted small">0 = 自动</span></div>
-        <div class="kv"><label>并行槽位</label><input class="input" style="max-width:140px" id="setParallel" type="number"></div>
-        <div class="kv"><label>Flash Attention</label><label class="switch"><input type="checkbox" id="setFa"><span></span></label></div>
+        <div class="panel-head"><b>推理参数</b>
+          <span class="tip" data-tip="改完后重新加载模型生效。&#10;&#10;上下文长度：越大越吃显存；8192 是 8K，32768 是 32K。&#10;GPU 层数：99 = 全部丢显卡，层数越低越省显存但越慢。&#10;CPU 线程：0 = 自动按核心数分配。&#10;并行槽位：同时能接几个请求。">i</span>
+        </div>
+        <div class="kv">
+          <label>上下文长度</label>
+          <input type="range" class="slider" id="setCtxRange" min="1024" max="131072" step="1024" data-unit="ctx">
+          <input class="input num" id="setCtx" type="number" step="512">
+        </div>
+        <div class="kv">
+          <label>GPU 层数</label>
+          <input type="range" class="slider" id="setNglRange" min="0" max="99" step="1" data-unit="gpu">
+          <input class="input num" id="setNgl" type="number">
+        </div>
+        <div class="kv">
+          <label>CPU 线程</label>
+          <input type="range" class="slider" id="setThreadsRange" min="0" max="64" step="1" data-unit="cpu">
+          <input class="input num" id="setThreads" type="number">
+        </div>
+        <div class="kv">
+          <label>并行槽位</label>
+          <input type="range" class="slider" id="setParallelRange" min="1" max="16" step="1" data-unit="slot">
+          <input class="input num" id="setParallel" type="number">
+        </div>
+        <div class="kv"><label>Flash Attention</label><label class="switch"><input type="checkbox" id="setFa"><span></span></label>
+          <span class="tip rt" data-tip="开启后注意力和 KV 缓存计算更快、更省显存，但不是所有显卡 / 模型都支持；开着出乱码就关掉。">i</span></div>
         <div class="kv"><label>视觉编码器进 GPU</label><label class="switch"><input type="checkbox" id="setMmprojGpu"><span></span></label>
-          <span class="muted small">看图用的 mmproj：默认留在 CPU（省显存）；大显存卡打开，编码快几倍、CPU 不再发烫。改后重新加载模型生效</span></div>
+          <span class="tip rt" data-tip="看图用的 mmproj：默认留在 CPU（省显存）；大显存卡打开，编码快几倍、CPU 不再发烫。改后重新加载模型生效。">i</span></div>
       </div>
 
       <div class="panel">
@@ -354,7 +360,7 @@
           <button class="btn ghost" id="btnProbeEngine">重新检测</button>
           <button class="btn ghost" id="btnEngineUpdate">检查更新</button>
         </div>
-        <div class="kv"><label>版本</label><span id="engineLatest" class="muted small">没查过 —— 点「检查更新」看看官方最新版是哪个</span></div>
+        <div class="kv"><label>版本</label><span id="engineLatest" class="muted small">没查过</span></div>
         <div class="kv">
           <label>加速前缀</label>
           <input class="input grow" id="setEngineMirror" placeholder="留空 = 直连 GitHub（慢但能用）">
@@ -366,13 +372,17 @@
             <option value="https://hub.gitmirror.com/">gitmirror</option>
           </select>
         </div>
-        <div class="kv"><label>下载说明</label><span class="muted small">慢或断了不用重来：进度存在 <code>%TEMP%\cnm-engine-&lt;后端&gt;.zip.part</code>，再点一次会<b>接着下</b>；换镜像也接着下。</span></div>
-        <div class="kv"><label>本地包安装</label><button class="btn ghost" id="btnInstallZip">选择本地 zip 安装…</button><span class="muted small">网慢就先用浏览器/下载器把 <code>llama-…-win-vulkan-x64.zip</code> 下好，再从这里选</span></div>
+        <div class="kv"><label>下载说明</label>
+          <span class="tip" data-tip="断了不用重来。进度存在 %TEMP%\cnm-engine-&lt;后端&gt;.zip.part，再点一次会接着下；换镜像也接着下。">i</span></div>
+        <div class="kv"><label>本地包安装</label><button class="btn ghost" id="btnInstallZip">选择本地 zip 安装…</button>
+          <span class="tip rt" data-tip="网慢就先用浏览器 / 下载器把 llama-…-win-vulkan-x64.zip 下好，再从这里选。">i</span></div>
         <div class="kv"><label>手动指定</label><input class="input grow" id="setEnginePath" placeholder="留空 = 用 engine\llama\llama-server.exe"></div>
       </div>
 
       <div class="panel">
-        <div class="panel-head"><b>外观与图标</b></div>
+        <div class="panel-head"><b>外观与图标</b>
+          <span class="tip rt" data-tip="图标支持 PNG / JPG / ICO / GIF，正方形最好（≥ 256×256）。换完之后侧栏 logo、窗口图标、托盘图标一起变，打包出来的 exe 图标也跟着用这张图。">i</span>
+        </div>
         <div class="kv"><label>主题</label><select class="input" id="setTheme" style="max-width:160px"><option value="dark">深色</option><option value="light">浅色</option></select><span class="muted small">切换立刻生效</span></div>
         <div class="kv">
           <label>图标</label>
@@ -383,15 +393,13 @@
             <input type="file" id="iconFile" accept="image/png,image/jpeg,image/bmp,image/gif,image/x-icon" style="display:none">
           </div>
         </div>
-        <div class="hint">
-          PNG / JPG / ICO / GIF 都行，正方形最好（≥ 256×256）。换完之后：侧栏 logo、窗口图标、托盘图标一起变；
-          打包出来的 exe 图标也会跟着用这张图。
-        </div>
         <div class="kv"><label>模型源</label><input class="input grow" id="setHf" placeholder="https://hf-mirror.com"></div>
       </div>
 
       <div class="panel">
-        <div class="panel-head"><b>快捷键（全局生效，程序在后台也管用）</b></div>
+        <div class="panel-head"><b>快捷键（全局生效，程序在后台也管用）</b>
+          <span class="tip" data-tip="点进输入框直接按组合键就填好了（要带 Ctrl / Alt / Shift / Win 至少一个）；写 Ctrl+Alt+C 这样也行，清空 = 不启用。&#10;&#10;右边的灯：绿 = 已生效，红 = 被别的程序占用了，灰 = 没设或不启用（鼠标停在灯上看原因）。保存后立刻生效。">i</span>
+        </div>
         <div class="kv">
           <label>呼出 / 退下</label>
           <input class="input hk" style="max-width:190px" id="setHkToggle" placeholder="Ctrl+Alt+C">
@@ -406,10 +414,6 @@
           <label>卸载模型（放显存）</label>
           <input class="input hk" style="max-width:190px" id="setHkUnload" placeholder="Ctrl+Alt+U">
           <span class="hk-led" id="hkUnloadState" data-tip=""></span>
-        </div>
-        <div class="hint">
-          点进输入框直接<b>按组合键</b>就填好了（要带 Ctrl / Alt / Shift / Win 至少一个）。写 <code>Ctrl+Alt+C</code> 这样也行，清空 = 不启用。<br>
-          右边的灯：<b class="hk-ok">绿</b> = 已生效，<b class="hk-bad">红</b> = 被别的程序占用了，<b class="hk-off">灰</b> = 没设或不启用（鼠标停在灯上看原因）。保存后立刻生效。
         </div>
         <div class="row" style="gap:8px">
           <button class="btn ghost tiny" id="btnHkReset">恢复默认</button>

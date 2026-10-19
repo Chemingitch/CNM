@@ -107,6 +107,31 @@ public sealed class UpstreamHub
         return p;
     }
 
+    /// <summary>
+    /// 把长长的上游报错压成一句能给界面看的短话。
+    ///
+    /// 中转站的报错经常是一整坨 JSON（HTTP 401 Invalid token 带 request id，
+    /// 一屏都放不下），直接塞进卡片会把界面撑得很难看。
+    /// 这里只留「状态码 + 一句人话」：能看懂发生了什么就够了，
+    /// 完整原文仍然写进日志（Write 那行），要查细节去日志里找。
+    /// </summary>
+    public static string Short(string err)
+    {
+        if (string.IsNullOrWhiteSpace(err)) return "连不上";
+        var s = err.Trim().Replace("\r", " ").Replace("\n", " ");
+        // 401/403 这类认证错，抽出一句人话就够
+        if (s.Contains("401")) return "401 认证失败（Key 不对或过期）";
+        if (s.Contains("403")) return "403 被拒绝（Key 没权限）";
+        if (s.Contains("404")) return "404 地址不对（检查 Base URL）";
+        if (s.Contains("429")) return "429 请求太频繁，稍后再试";
+        if (s.Contains("timeout") || s.Contains("超时") || s.Contains("timed out")) return "连接超时（网络或代理问题）";
+        if (s.Contains("refused") || s.Contains("拒绝")) return "连接被拒绝（地址或端口不对）";
+        if (s.Contains("Name or service") || s.Contains("no such host") || s.Contains("DNS")) return "域名解析不了（检查地址）";
+        if (s.Contains("SSL") || s.Contains("certificate") || s.Contains("证书")) return "HTTPS 证书有问题";
+        // 其它情况截断，别让界面被撑破
+        return s.Length <= 48 ? s : s.Substring(0, 48) + "…";
+    }
+
     /// <summary>测速结果缓存：key = 上游名 + \0 + 模型名 → 首字延迟毫秒。
     /// 放后端（不是前端内存）：刷新模型列表后自动重测，重画卡片也不丢，重启前一直有效。</summary>
     private static readonly Dictionary<string, int> _pingCache = new(StringComparer.Ordinal);
@@ -366,12 +391,13 @@ public sealed class UpstreamHub
         {
             var (ok, r, models, err) = await TryModelsAsync(cfg, root, cfg.Proxy, 20, ct);
             if (ok) { info.Root = r; info.Models = models; info.ProxyUsed = NormalizeProxy(cfg.Proxy); }
-            else info.Error = err + (IsDirect(cfg.Proxy)
-                ? "。如果这台机器直连不了这个站，把代理那格填「自动」，让 CNM 自己找条能通的路"
-                : "");
+            // 界面上只留一句短的（原始报错能占半个屏幕，之前塞在卡片里很难看）。
+            // 给用户的建议写进 logs 的 detail 里，需要时查日志。
+            else info.Error = Short(err) + (IsDirect(cfg.Proxy) ? "　（代理建议填「自动」）" : "");
             Write(info.Ok
                 ? $"[上游] {cfg.Name} 连上了：{info.Models.Count} 个模型（{info.Root}）"
-                : $"[上游] {cfg.Name} 连不上：{info.Error}");
+                : $"[上游] {cfg.Name} 连不上：{info.Error}"
+                  + (IsDirect(cfg.Proxy) ? "。如果这台机器直连不了这个站，把代理那格填「自动」，让 CNM 自己找条能通的路" : ""));
         }
 
         lock (_cache) _cache[cfg.Name] = info;

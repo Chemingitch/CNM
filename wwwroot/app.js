@@ -322,6 +322,21 @@ function fillSettings(s) {
   $('#setNgl').value = s.gpuLayers;
   $('#setThreads').value = s.threads;
   $('#setParallel').value = s.parallel;
+  // 滑条跟着数字框走（数字框可能存着超出滑条范围的值，滑条夹到自己的区间）
+  // ⚠️ syncSlider 定义在下面的 bind() 里 —— 这里不能直接调，否则报
+  //    "syncSlider is not defined"（初始化失败）。改成有则调、没有就等 bind 后同步。
+  if (typeof syncSlider === 'function') {
+    syncSlider('setCtxRange', s.contextSize);
+    syncSlider('setNglRange', s.gpuLayers);
+    syncSlider('setThreadsRange', s.threads);
+    syncSlider('setParallelRange', s.parallel);
+  } else {
+    // bind() 还没跑：记下来，等它跑完再同步（见文件末尾 initTips 附近）
+    S._pendingSliderSync = [
+      ['setCtxRange', s.contextSize], ['setNglRange', s.gpuLayers],
+      ['setThreadsRange', s.threads], ['setParallelRange', s.parallel],
+    ];
+  }
   $('#setFa').checked = !!s.flashAttn;
   $('#setMmprojGpu').checked = !!s.mmprojOnGpu;
   $('#setEnginePath').value = s.enginePath || '';
@@ -359,7 +374,112 @@ function renderHotkeyStatus(st) {
       el.className = 'hk-led ok';
       el.setAttribute('data-tip', s + ' · 生效中');
     }
+    placeTip(el);      // 灯是常显的，气泡位置每次刷新都重算
   });
+}
+
+/* ── 悬停气泡定位 ──
+   气泡用 position:fixed 才不会被 .view / main 的 overflow 裁掉，
+   但 fixed 之后 CSS 就没法按 ⓘ 的位置对齐了 —— 得由 JS 算坐标。
+   规则：贴着 ⓘ 的下方，超出视口右/下边界就朝内收，保证完整可见。 */
+function placeTip(el) {
+  if (!el) return;
+  // 指示灯的气泡用 CSS 相对定位（灯独占一行右侧、上方是空的，不会撞边），
+  // 不需要也不该吃 JS 坐标 —— 混着用会让它一个都不显示。
+  if (el.classList.contains('hk-led')) return;
+  const setPos = () => {
+    const r = el.getBoundingClientRect();
+    const gap = 8, pad = 8;
+    // 先让浏览器把气泡渲染出来量尺寸（visibility 仍是 hidden，不会闪）
+    el.classList.add('placed');
+    const a = getComputedStyle(el, '::after');
+    const w = parseFloat(a.width) || 220;
+    const h = parseFloat(a.height) || 40;
+    // 水平：默认瓶口对齐 ⓘ 左侧；.rt 反向右对齐
+    let x = el.classList.contains('rt') ? (r.right - w) : r.left;
+    x = Math.max(pad, Math.min(x, window.innerWidth - w - pad));
+    // 垂直：优先下方；下方放不下且上方更宽敞就翻上去
+    let y = r.bottom + gap;
+    if (y + h > window.innerHeight - pad && r.top - gap - h > pad) y = r.top - gap - h;
+    el.style.setProperty('--tip-x', x.toFixed(0) + 'px');
+    el.style.setProperty('--tip-y', y.toFixed(0) + 'px');
+  };
+  if (!el._tipBound) {
+    el._tipBound = true;
+    el.addEventListener('mouseenter', setPos);
+    el.addEventListener('focus', setPos);
+  }
+  setPos();
+}
+
+/** 把页面上所有带 data-tip 的元素都接上提示（开页面时跑一次） */
+function initTips(root) {
+  $$((root ? root + ' ' : '') + '.tip, .hk-led[data-tip]').forEach(placeTip);
+  /* 带 data-tip 的普通元素（按钮 / 状态文字等）走自绘浮层。
+     它们原来用原生 title —— 弹出来是黑色直角硬框，跟主题不搭。
+     .tip 那个 ⓘ 有自己的 CSS 气泡，别重复挂。 */
+  $$((root ? root + ' ' : '') + '[data-tip]').forEach((el) => {
+    if (el.classList.contains('tip') || el.classList.contains('hk-led')) return;
+    if (el._tipBound2) { el._tipText = el.getAttribute('data-tip') || ''; return; }
+    tipify(el, el.getAttribute('data-tip') || '');
+  });
+}
+/** 灯是新渲染出来的，data-tip 后填 —— 渲染后再补一次定位（灯走 CSS，这里只是保险） */
+function refreshTips() {
+  $$('.tip').forEach(placeTip);
+}
+
+/* ── 自绘悬停提示（单例） ──
+   原生 title 的提示框是操作系统画的，永远黑色直角硬框，和主题不搭。
+   这里用一个 body 下的浮层替代：圆角、主题色、自动夹进视口。
+   用法：tipify(元素, '提示文字')；清空传空字符串即可。 */
+let _tipbox = null;
+function _ensureTipbox() {
+  if (!_tipbox) {
+    _tipbox = document.createElement('div');
+    _tipbox.className = 'tipbox';
+    document.body.appendChild(_tipbox);
+  }
+  return _tipbox;
+}
+function showTipbox(el, text) {
+  const box = _ensureTipbox();
+  if (!text) { box.classList.remove('on'); return; }
+  box.textContent = text;
+  box.style.left = '0px';
+  box.style.top = '0px';
+  box.classList.add('on');
+  // 量出尺寸后再夹进视口（fixed 元素超出视口就不显示）
+  const r = el.getBoundingClientRect();
+  const w = box.offsetWidth, h = box.offsetHeight, pad = 8, gap = 6;
+  let x = r.left;
+  if (x + w > window.innerWidth - pad) x = window.innerWidth - pad - w;
+  x = Math.max(pad, x);
+  let y = r.bottom + gap;
+  if (y + h > window.innerHeight - pad && r.top - gap - h > pad) y = r.top - gap - h;
+  box.style.left = x.toFixed(0) + 'px';
+  box.style.top = Math.max(pad, y).toFixed(0) + 'px';
+}
+function hideTipbox() { if (_tipbox) _tipbox.classList.remove('on'); }
+
+/**
+ * 把元素的原生 title 换成自绘提示。
+ * 传 null 表示"只清掉 title，不加提示"（用于动态内容变化时重置）。
+ */
+function tipify(el, text) {
+  if (!el) return;
+  el.removeAttribute('title');                       // 彻底断掉原生提示
+  el._tipText = text || '';
+  if (el._tipBound2) return;
+  el._tipBound2 = true;
+  const show = () => { if (el._tipText) showTipbox(el, el._tipText); };
+  el.addEventListener('mouseenter', show);
+  el.addEventListener('focus', show);
+  el.addEventListener('mouseleave', hideTipbox);
+  el.addEventListener('blur', hideTipbox);
+  // 滚动/缩放时直接收起来，免得浮层停在旧位置
+  window.addEventListener('scroll', hideTipbox, { passive: true, capture: true });
+  window.addEventListener('resize', hideTipbox);
 }
 
 /** 把键盘事件转成 "Ctrl+Alt+C" 这种写法（点进输入框直接按组合键） */
@@ -437,7 +557,7 @@ function upRow(u) {
       '<label class="switch"><input type="checkbox" class="up-on"' + (u.enabled === false ? '' : ' checked') + '><span></span></label>' +
       '<input class="input up-name" style="max-width:130px" placeholder="名字" value="' + esc(u.name || '') + '">' +
       '<span class="grow"></span>' +
-      '<button class="btn tiny up-detect" title="自动试「直连 / 系统代理 / 本机常见端口」，看这个站该不该走代理">自动检测</button>' +
+      '<button class="btn tiny up-detect" data-tip="自动试「直连 / 系统代理 / 本机常见端口」，看这个站该不该走代理">自动检测</button>' +
       '<button class="btn tiny up-test">测试</button>' +
       '<button class="btn tiny ghost up-chat">试一句</button>' +
       '<button class="btn tiny ghost up-del">删</button>' +
@@ -752,16 +872,54 @@ function fmtDur(ms) {
   return ms >= 1000 ? (ms / 1000).toFixed(1) + ' 秒' : Math.round(ms) + ' 毫秒';
 }
 
+/** 给「切页过渡」涉及的几个容器挂上 .usage-fade。
+    类由 JS 挂而不是写死在 HTML 里：这些节点有的是动态生成的（环形 / 柱形），
+    每次渲染后补挂最省事。 */
+function markUsageFade() {
+  ['usageTotals', 'usageChart', 'usageGlance', 'usageHint', 'usageCols', 'ugSpark'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('usage-fade');
+  });
+}
+
 function setUsageTab(t) {
-  S.utab = (t === 'month' || t === 'year') ? t : 'day';
+  const next = (t === 'month' || t === 'year') ? t : 'day';
+  const changed = next !== S.utab;
+  S.utab = next;
   $$('#usageTabs .seg-btn').forEach((b) => b.classList.toggle('on', b.dataset.utab === S.utab));
-  renderUsage();
+  const panel = $('#usagePanel');
+  if (!changed || !panel) { renderUsage(); return; }
+
+  /* 切页过渡：淡出 → 换内容 → 淡入。
+     CSS 侧只有两条规则（.usage-fade 基础态 / .usage.swap .usage-fade 起始态），
+     这里负责时序：
+       1) 加 .swap → 触发淡出（.12 + 上移 4px + 微缩）
+       2) 等 150ms（略长于 .13s 的淡出，确保走完）
+       3) 换内容 → 双 rAF 后撤 .swap → 淡入（.26s 曲线）
+     ⚠️ 之前有三套重叠的 .swap 规则叠加，淡入卡在 .12 回不来；现已清理成一套。 */
+  S._usageTabToken = (S._usageTabToken || 0) + 1;
+  const token = S._usageTabToken;
+  panel.classList.add('swap');
+  clearTimeout(S._usageTabTimer);
+  S._usageTabTimer = setTimeout(() => {
+    if (token !== S._usageTabToken) return;      // 期间又点了别的页：这次作废
+    renderUsage();
+    /* 强制重排后再撤 .swap。
+       ⚠️ 只靠双 rAF 不够：实测撤类后 opacity 停在 .12 不回到 1
+          （浏览器把"类没了"当成一次性跳变，不做插值）。
+          读一次 offsetHeight 会强制浏览器把当前样式定下来，
+          此时元素的起始值已经被记录，撤类才会走过渡。 */
+    void panel.offsetHeight;
+    panel.classList.remove('swap');
+    requestAnimationFrame(() => { if (token !== S._usageTabToken) return; });
+  }, 150);
 }
 
 function renderUsage() {
   const totals = $('#usageTotals');
   const chart = $('#usageChart');
   if (!chart || !totals) return;
+  markUsageFade();        // 切页过渡要靠 .usage-fade，每次渲染后补挂
   const u = S.usage;
   if (!u) {
     totals.textContent = '—';
@@ -792,11 +950,16 @@ function renderUsage() {
   renderUsageChart(series, t, name);
 
   const tt = u.total || {};
-  $('#usageHint').textContent = '累计 ' + fmtNum(tt.req) + ' 次（本地 ' + fmtNum(tt.local) + ' / 外地 ' + fmtNum(tt.up) + '）' +
-    ((((tt.pt || 0) + (tt.ct || 0)) > 0) ? ' · token 输入 ' + fmtNum(tt.pt) + ' / 输出 ' + fmtNum(tt.ct) : '') +
-    ' · 回传 ' + fmtBytes(tt.bytes) +
-    (u.firstSeen ? '　｜　从 ' + u.firstSeen + ' 开始记（图表的月份/年份只画到这天为止）' : '') +
-    '；只算 chat/completions 这类真干活的请求（模型列表、探活不算），数字存在 %APPDATA%\\CNM\\usage.json；柱子颜色：下=本地、上=外地。';
+  // 摘要只留一句「累计 N 次」；统计口径、存储位置这些啰嗦话收进悬停提示。
+  const hintEl = $('#usageHint');
+  hintEl.textContent = '累计 ' + fmtNum(tt.req) + ' 次 · 回传 ' + fmtBytes(tt.bytes) +
+    (u.firstSeen ? '　｜　从 ' + u.firstSeen + ' 开始记' : '');
+  tipify(hintEl, '累计 ' + fmtNum(tt.req) + ' 次（本地 ' + fmtNum(tt.local) + ' / 外地 ' + fmtNum(tt.up) + '）' +
+    ((((tt.pt || 0) + (tt.ct || 0)) > 0) ? '\ntoken 输入 ' + fmtNum(tt.pt) + ' / 输出 ' + fmtNum(tt.ct) : '') +
+    '\n回传 ' + fmtBytes(tt.bytes) +
+    (u.firstSeen ? '\n从 ' + u.firstSeen + ' 开始记（月份 / 年份只画到这天为止）' : '') +
+    '\n\n只算 chat/completions 这类真干活的请求（模型列表、探活不算）。' +
+    '\n数字存在 %APPDATA%\\CNM\\usage.json。');
 
   renderUsageGlance(t, series, name);
 }
@@ -934,7 +1097,7 @@ function renderUsageCols(host, series, period) {
 
   const bar = (cls, v, label) => {
     const h = v ? Math.max(4, Math.round((v / mx) * 100)) : 0;
-    return '<div class="ucol-b" title="' + esc(label + '：' + v + ' 次') + '">' +
+    return '<div class="ucol-b" data-tip="' + esc(label + '：' + v + ' 次') + '">' +
       '<i class="' + cls + '" style="height:' + h + '%"></i></div>';
   };
 
@@ -944,7 +1107,7 @@ function renderUsageCols(host, series, period) {
     // 再减一次会把外地重复扣掉（137 会算成 3 而不是 7）。
     const up = Math.max(0, req - loc);
     const tip = (d.k || '') + '：共 ' + req + ' 次';
-    return '<div class="ucol-group" title="' + esc(tip) + '">' +
+    return '<div class="ucol-group" data-tip="' + esc(tip) + '">' +
       '<div class="ucol-set">' +
         bar('ucol-loc', loc, '本地') +
         bar('ucol-fail', fail, '失败') +
@@ -974,9 +1137,9 @@ function renderUsageBars(host, t) {
 
   host.innerHTML = groups.map((g) => {
     const w = (v) => (v ? Math.max(6, Math.round((v / mx) * 100)) : 0);
-    const bar = (cls, v, name) => '<span class="ug-hb" title="' + esc(g.lab + name + '：' + v + ' 次') + '">' +
+    const bar = (cls, v, name) => '<span class="ug-hb" data-tip="' + esc(g.lab + name + '：' + v + ' 次') + '">' +
       '<i class="' + cls + '" style="width:' + w(v) + '%"></i></span>';
-    return '<div class="ug-hr" title="' + esc(g.lab + '：' + g.total + ' 次（成功 ' + g.ok + ' / 失败 ' + g.bad + '）') + '">' +
+    return '<div class="ug-hr" data-tip="' + esc(g.lab + '：' + g.total + ' 次（成功 ' + g.ok + ' / 失败 ' + g.bad + '）') + '">' +
       '<span class="ug-hk">' + esc(g.lab) + '</span>' +
       '<span class="ug-hbars">' +
         bar('ug-hok', g.ok, '成功') +
@@ -1089,11 +1252,22 @@ function renderRemote() {
   if (emp) {
     emp.style.display = list.length ? 'none' : '';
     if (!list.length) {
-      emp.textContent = ups.length === 0
-        ? '还没有外地模型 —— 先到「服务与日志 → 守望者」把中转站的地址和 Key 填上（只用填这两样）。'
-        : (bad.length ? '上游连不上：' + bad[0].error
-          : ((q || S.upLab) ? '这个条件下没有外地模型，把过滤清掉试试。' : '这个上游没报出模型，点上面「重新连接」再拉一次。'));
-    }
+      /* 报错原文很长（HTTP 401 那种能占半个屏幕），这里只给一句短的，
+         完整内容塞进 title，鼠标停上去才看 —— 界面上不再铺一大段。 */
+      if (ups.length === 0) {
+        emp.textContent = '还没有外地模型 —— 先到「服务与守望者」填地址和 Key';
+        tipify(emp, '到「服务与日志 → 守望者」把中转站的地址和 Key 填上（只用填这两样）。');
+      } else if (bad.length) {
+        emp.textContent = '上游连不上，鼠标停这里看原因';
+        tipify(emp, bad[0].error || '');
+      } else if (q || S.upLab) {
+        emp.textContent = '这个条件下没有外地模型';
+        tipify(emp, '把上面的过滤条件清掉试试。');
+      } else {
+        emp.textContent = '这个上游没报出模型，点上面「重新连接」再拉一次';
+        tipify(emp, '点「重新连接」会重新向上游要一次模型列表。');
+      }
+    } else { tipify(emp, ''); }
   }
 
   box.innerHTML = list.map((r) => {
@@ -1101,8 +1275,8 @@ function renderRemote() {
     const ping = pingOf(r.up, r.m);
     const badge = ping
       ? (ping.ok
-          ? `<span class="badge b5 ${ping.firstMs < 1000 ? '' : ping.firstMs < 3000 ? 'mid' : 'slow'}" title="首字延迟（实测发一次最小请求）">${fmtMs(ping.firstMs)}</span>`
-          : `<span class="badge" title="${esc(ping.error || '测速失败')}">测速失败</span>`)
+          ? `<span class="badge b5 ${ping.firstMs < 1000 ? '' : ping.firstMs < 3000 ? 'mid' : 'slow'}" data-tip="首字延迟（实测发一次最小请求）">${fmtMs(ping.firstMs)}</span>`
+          : `<span class="badge" data-tip="${esc(ping.error || '测速失败')}">测速失败</span>`)
       : '';
     return `
     <div class="card ${on ? 'loaded' : ''}">
@@ -1438,6 +1612,96 @@ function addLog(source, line) {
 }
 
 /* ---------------- 绑定 ---------------- */
+/* ── 推理参数：滑条 ↔ 数字框 双向绑定 + 拖动气泡 + 按「吃配置程度」变色 ──
+   注意这几个函数必须在顶层（bind() 之外）：applySettings 会调 syncSlider，
+   如果定义在 bind() 里就是不同作用域，页面初始化直接报 syncSlider is not defined。 */
+function syncSlider(rangeId, value) {
+  const r = document.getElementById(rangeId);
+  if (!r) return;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return;
+  r.value = Math.min(Number(r.max), Math.max(Number(r.min), v));
+  paintSlider(r);
+}
+function paintSlider(r) {
+  if (!r) return;
+  const min = Number(r.min), max = Number(r.max), v = Number(r.value);
+  const pct = max > min ? ((v - min) / (max - min)) * 100 : 0;
+  r.style.setProperty('--fill', pct.toFixed(1) + '%');
+  /* 颜色随「吃配置程度」走：左端轻松（青绿）→ 右端吃紧（橙红）。
+     这几个参数越往右拉越吃显存 / 越慢，所以右端要发红警示。 */
+  const kind = r.dataset.unit || '';
+  let level = 0;
+  if (kind === 'ctx') level = pct >= 75 ? 3 : pct >= 50 ? 2 : pct >= 25 ? 1 : 0;
+  else if (kind === 'gpu') level = pct >= 90 ? 3 : pct >= 60 ? 2 : pct >= 25 ? 1 : 0;
+  else if (kind === 'cpu') level = pct >= 70 ? 3 : pct >= 45 ? 2 : pct >= 20 ? 1 : 0;
+  else level = pct >= 80 ? 3 : pct >= 50 ? 2 : pct >= 25 ? 1 : 0;
+  r.dataset.level = String(level);
+}
+/** 上下文长度换算：8192 → 「8K」 */
+function fmtCtx(v) {
+  const n = Number(v) || 0;
+  return n >= 1024 ? (n / 1024).toFixed(n % 1024 ? 1 : 0) + 'K' : String(n);
+}
+/** 每个滑条拖到当前值时，气泡里写什么 */
+const sliderLabel = {
+  ctx: (v) => fmtCtx(v) + ' token',
+  gpu: (v) => (Number(v) >= 99 ? '99 · 全部层丢显卡' : v + ' 层在显卡上'),
+  cpu: (v) => (Number(v) === 0 ? '0 · 自动按核心数' : v + ' 线程'),
+  slot: (v) => v + ' 个并发请求',
+};
+/** 拖动时跟随鼠标的气泡：滑块上方浮一个小方块，实时显示当前值。
+    没在拖动后 1.2 秒自动淡出 —— 常驻会挡视线。 */
+function makeDragBubble(r) {
+  let b = r._bubble;
+  if (!b) {
+    b = document.createElement('div');
+    b.className = 'slider-bubble';
+    document.body.appendChild(b);
+    r._bubble = b;
+  }
+  return b;
+}
+function showDragBubble(r, v) {
+  const b = makeDragBubble(r);
+  const kind = r.dataset.unit || '';
+  b.textContent = (sliderLabel[kind] || ((x) => x))(v);
+  const rect = r.getBoundingClientRect();
+  const min = Number(r.min), max = Number(r.max);
+  const pct = max > min ? (Number(v) - min) / (max - min) : 0;
+  const thumb = 16;                       // 滑块直径，跟 CSS 对齐
+  const x = rect.left + pct * (rect.width - thumb) + thumb / 2;
+  b.style.left = x.toFixed(0) + 'px';
+  b.style.top = (rect.top - 4).toFixed(0) + 'px';
+  b.classList.add('on');
+  clearTimeout(r._btimer);
+  r._btimer = setTimeout(() => b.classList.remove('on'), 1200);
+}
+/** 挂上滑条事件（在 bind 末尾或页面启动时调一次） */
+function initSliders() {
+  const pairs = [
+    ['setCtxRange', 'setCtx'], ['setNglRange', 'setNgl'],
+    ['setThreadsRange', 'setThreads'], ['setParallelRange', 'setParallel'],
+  ];
+  for (const [rId, nId] of pairs) {
+    const r = document.getElementById(rId), n = document.getElementById(nId);
+    if (!r || !n || r._sliderBound) continue;
+    r._sliderBound = true;
+    r.addEventListener('input', () => { n.value = r.value; paintSlider(r); showDragBubble(r, r.value); });
+    n.addEventListener('input', () => {
+      const v = Number(n.value);
+      if (Number.isFinite(v)) r.value = Math.min(Number(r.max), Math.max(Number(r.min), v));
+      paintSlider(r); showDragBubble(r, r.value);
+    });
+    paintSlider(r);
+  }
+  // 有无待补的同步（applySettings 先跑、bind 后跑时留下的）
+  if (S._pendingSliderSync) {
+    for (const [id, v] of S._pendingSliderSync) syncSlider(id, v);
+    S._pendingSliderSync = null;
+  }
+}
+
 function bind() {
   /* 侧栏折叠：点击按钮切换，状态记 localStorage，下次打开保持 */
   (function initSide() {
@@ -1447,7 +1711,7 @@ function bind() {
     const sync = () => {
       const on = side.classList.contains('collapsed');
       btn.textContent = on ? '' : '« 收起侧栏';   // 折叠态的 » 由 CSS ::before 画
-      btn.title = on ? '展开侧栏' : '折叠侧栏';
+      tipify(btn, on ? '展开侧栏' : '折叠侧栏');
       btn.setAttribute('aria-label', btn.title);
     };
     sync();
@@ -1467,20 +1731,54 @@ function bind() {
   /* 顶栏拖动：WebView2 不支持 CSS 的 app-region:drag（实测无效），
      所以在顶栏空白处按下鼠标时发 startDrag 给主进程，换成系统级拖动。
      ⚠️ 要避开按钮/胶囊/输入框 —— 在那些控件上按住不能拖窗口。 */
+  /* 顶栏拖动 + 双击最大化
+     ⚠️ 两个坑都得躲：
+     ① startDrag 走系统拖动（WM_NCLBUTTONDOWN + HTCAPTION），一发出去鼠标就被
+        系统接管，后续 mouseup / dblclick 全收不到 —— 所以 dblclick 监听不触发。
+        解法：自己数点击间隔，两次按下 < 400ms 且几乎没动 = 双击。
+     ② 更隐蔽的：系统拖动**自带**「双击标题栏 = 最大化/还原」。如果一按下就发
+        startDrag，系统会把它记成标题栏点击；此时我们再判为双击并 toggleMaximize，
+        系统也判一次双击 → 两次切换互相抵消，表现成「双击放大后单击又缩小」。
+        解法：按下时**先不发** startDrag，等鼠标真的移动超过阈值才发。
+        没移动 = 单击/双击，系统完全不参与，也就不会抢走双击。 */
   (function initDragArea() {
     const bar = document.querySelector('.topbar');
     if (!bar) return;
+    const noDrag = 'button, input, select, textarea, a, .switch, .seg, .win-btns, .pill';
+    let lastClickAt = 0, lastX = 0, lastY = 0;      // 双击判定用
+    let downAt = 0, downX = 0, downY = 0, dragging = false;   // 拖动判定用
+
     bar.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;                       // 只处理左键
-      // 点在可交互元素上就不拖（按钮、下拉、输入、开关…）
-      if (e.target.closest('button, input, select, textarea, a, .switch, .seg, .win-btns, .pill')) return;
-      e.preventDefault();
-      winCall('startDrag');
+      if (e.button !== 0) return;                        // 只处理左键
+      if (e.target.closest(noDrag)) return;              // 控件上不拖、也不算双击
+      const now = Date.now();
+      const near = Math.abs(e.clientX - lastX) < 6 && Math.abs(e.clientY - lastY) < 6;
+      if (now - lastClickAt < 400 && near) {
+        // 第二次按下 → 双击：最大化 / 还原（此时系统没参与，不会重复切换）
+        lastClickAt = 0;
+        downAt = 0;
+        e.preventDefault();
+        winCall('windowToggleMaximize');
+        return;
+      }
+      lastClickAt = now; lastX = e.clientX; lastY = e.clientY;
+      // 先只记账，等移动了才真去拖
+      downAt = now; downX = e.clientX; downY = e.clientY; dragging = false;
     });
-    bar.addEventListener('dblclick', (e) => {
-      if (e.target.closest('button, input, select, textarea, a, .switch, .seg, .win-btns, .pill')) return;
-      winCall('windowToggleMaximize');
-    });
+
+    // 鼠标按住后移动超过 4px 才启动系统拖动（单击、双击都不会走到这里）
+    const onMove = (e) => {
+      if (!downAt || dragging) return;
+      if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) {
+        dragging = true;
+        downAt = 0;
+        lastClickAt = 0;      // 已经开始拖了，别再把这次算进双击
+        winCall('startDrag');
+      }
+    };
+    bar.addEventListener('mousemove', onMove);
+    window.addEventListener('mousemove', onMove);       // 移出顶栏也别丢
+    window.addEventListener('mouseup', () => { downAt = 0; dragging = false; });
     bar.style.cursor = 'default';
   })();
 
@@ -1601,14 +1899,23 @@ function bind() {
       const list = (g && g.gpus) || [];
       const names = list.map((x) => x.name + (x.vramMiB ? '（' + (x.vramMiB / 1024).toFixed(0) + ' GB）' : '')).join('、');
       const hint = $('#gpuHint');
-      if (hint) hint.textContent = (names ? names + ' → ' : '') + '建议用 ' + (g.recommend || 'vulkan') + '。' + (g.reason || '');
+      /* 卡片里只留「显卡名 → 建议用 X」；理由那段（能有好几行）收进 title。
+         这是动态信息，所以留常显，只是把解释性的话挪走。 */
+      if (hint) {
+        hint.textContent = (names ? names + ' → ' : '') + '建议用 ' + (g.recommend || 'vulkan');
+        tipify(hint, (g.reason || '') +
+          '\n\n本机显卡：' + (names || '没认出来') +
+          '\n推荐后端：' + (g.recommend || 'vulkan'));
+      }
       if (!S.variantTouched && g && g.recommend) { const sel = $('#engineVariant'); if (sel) sel.value = g.recommend; }
     } catch (e) {
       const hint = $('#gpuHint');
-      if (hint) hint.textContent = '没认出来（不影响使用，手动挑一个就行）';
+      if (hint) { hint.textContent = '没认出来'; tipify(hint, '没认出来不影响使用，手动挑一个后端就行。'); }
     }
   })();
   $('#engineVariant').addEventListener('change', () => { S.variantTouched = true; checkEngineUpdate(); });
+
+
   async function checkEngineUpdate() {
     const v = $('#engineVariant').value;
     const out = $('#engineLatest');
@@ -1624,20 +1931,26 @@ function bind() {
       const instName = { vulkan: 'Vulkan', rocm: 'ROCm', cuda: 'CUDA', cpu: 'CPU', generic: '通用', unknown: '' }[inst] || inst;
 
       const parts = [];
-      parts.push('官方最新 ' + r.tag + '（' + v + ' 包约 ' + Math.round(r.sizeMiB) + ' MB）');
+      parts.push('官方最新 ' + r.tag);
       // 「本机」说的是实际装的那个后端，不是下拉里选的 —— 两者可以不一样
-      parts.push(instName
-        ? '本机装的是 ' + instName + (r.current ? '（' + r.current + '）' : '')
-        : (r.current ? '本机 ' + r.current : '本机还没装'));
+      parts.push(instName ? '本机 ' + instName : (r.current ? '本机已装' : '本机没装'));
 
       if (!curN) parts.push('点「下载并安装引擎」装上');
       else if (latN && curN >= latN) parts.push('已是最新');
-      else if (latN) parts.push('有新版，点「下载并安装引擎」会装成 ' + r.tag);
-      // 选了 A 但装的是 B：明确提醒，别让人以为已经换了
+      else if (latN) parts.push('有新版');
+      /* 卡片里只给这几项短状态（本机显卡 / 版本本身就是动态信息，要常显）；
+         版本号全文、包体积、后端不匹配的详细提醒都收进 title。 */
+      out.textContent = parts.join(' · ');
+      const detail = [];
+      detail.push('官方最新：' + r.tag + '（' + v + ' 包约 ' + Math.round(r.sizeMiB) + ' MB）');
+      detail.push('本机安装：' + (instName || '未知') + (r.current ? ' · ' + r.current : ''));
+      if (!curN) detail.push('还没装引擎，点「下载并安装引擎」');
+      else if (latN && curN >= latN) detail.push('本机版本已是最新，无需更新');
+      else if (latN) detail.push('有新版，点「下载并安装引擎」会装成 ' + r.tag);
       if (inst && inst !== 'unknown' && inst !== v) {
-        parts.push('⚠ 你选的是 ' + v + '，但本机装的是 ' + instName + ' —— 要换后端请点「下载并安装引擎」');
+        detail.push('⚠ 你选的是 ' + v + '，但本机装的是 ' + instName + ' —— 要换后端请点「下载并安装引擎」');
       }
-      out.textContent = parts.join('；');
+      tipify(out, detail.join('\n'));
     } catch (e) { out.textContent = e.message; }
   }
   $('#btnEngineUpdate').addEventListener('click', () => checkEngineUpdate());
@@ -1850,8 +2163,151 @@ async function doSearch() {
   } catch (e) { if (mySeq === S.hfSeq) $('#hfResults').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; }
 }
 
+/* ---------------- 自绘下拉框 ---------------- */
+/* 原生 <select> 的弹层治不了：它由浏览器单独绘制，border-radius 无效、
+   选中项恒为系统浅灰。所以保留 select 当数据源（JS 里 #id 取值照旧可用），
+   在它上面盖一个自绘按钮 + 自绘弹层。
+
+   ⚠️ 关键：任何时刻都让原生 select 的 .value 保持真值 ——
+      现有代码全在读写 $('#setTheme').value 这类调用，不能破坏。
+      这里通过「点自绘项 → 改 select.value → 派发 change 事件」维持一致。 */
+function initDropdowns() {
+  $$('select.input').forEach((sel) => {
+    if (sel._dd) return;
+    sel._dd = true;
+
+    // 触发器
+    const dd = document.createElement('div');
+    dd.className = 'dd';
+    dd.tabIndex = 0;
+    dd.innerHTML = '<span class="dd-t"></span>' +
+      '<svg class="dd-a" viewBox="0 0 12 8" fill="none"><path d="M1 1.5 6 6.5l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    // 宽度和 select 的 max-width 对齐，视觉上接替它
+    const mw = sel.style.maxWidth;
+    if (mw) dd.style.maxWidth = mw;
+    sel.parentNode.insertBefore(dd, sel);
+
+    // 弹层（挂 body 上，避免被面板 overflow 裁）
+    const pop = document.createElement('div');
+    pop.className = 'dd-pop';
+    document.body.appendChild(pop);
+
+    const label = () => {
+      const o = sel.options[sel.selectedIndex];
+      return o ? o.textContent : '';
+    };
+    const sync = () => { dd.querySelector('.dd-t').textContent = label(); };
+    function renderItems() {
+      pop.innerHTML = '';
+      [...sel.options].forEach((o, i) => {
+        const it = document.createElement('div');
+        it.className = 'dd-i' + (i === sel.selectedIndex ? ' on' : '');
+        it.textContent = o.textContent;
+        it.addEventListener('mousedown', (ev) => {
+          ev.preventDefault();      // 别让触发器失焦
+          sel.selectedIndex = i;
+          sync();
+          close();
+          // 让现有监听器照常收到通知（它们绑的都是 change / click）
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+          dd.focus();
+        });
+        pop.appendChild(it);
+      });
+    }
+    function place() {
+      const r = dd.getBoundingClientRect();
+      const pad = 8, gap = 4;
+
+      /* ① 水平：先贴触发器左边，再夹进视口。
+         ⚠️ 之前只写了 pop.style.left = r.left —— 触发器靠窗口右边时，
+            弹层会伸到窗口外被边界裁掉（右边那个 ✓ 和文字看着就"秃"了）。
+            position:fixed 的元素一旦超出视口就渲染不出来，这里必须夹。 */
+      pop.style.left = '0px';                 // 先归零，免得量到的宽度受上次位置影响
+      pop.style.minWidth = r.width + 'px';
+      const w = pop.scrollWidth || r.width;
+      let left = r.left;
+      if (left + w > window.innerWidth - pad) left = window.innerWidth - pad - w;
+      left = Math.max(pad, left);
+      pop.style.left = left.toFixed(0) + 'px';
+
+      /* ② 垂直：默认朝下；下方不够且上方更宽裕才翻上去。
+         高度用 scrollHeight 量（不受 visibility 影响）——
+         以前用 offsetHeight，弹层刚加 .open 还没布局，量到 0 → 误判 → 朝上盖住上面的字。 */
+      const contentH = Math.min(pop.scrollHeight || 260, 420);
+      const spaceBelow = window.innerHeight - r.bottom - gap - pad;
+      const spaceAbove = r.top - gap - pad;
+      const goUp = contentH > spaceBelow && spaceAbove > spaceBelow;
+      pop.classList.toggle('up', goUp);
+      // 朝下用 top 贴触发器下沿；朝上用 bottom 贴触发器上沿（不碰 transform，免得跟过渡打架）
+      if (goUp) {
+        pop.style.top = 'auto';
+        pop.style.bottom = (window.innerHeight - r.top + gap).toFixed(0) + 'px';
+      } else {
+        pop.style.bottom = 'auto';
+        pop.style.top = (r.bottom + gap).toFixed(0) + 'px';
+      }
+    }
+    function open() {
+      renderItems();
+      dd.classList.add('open');
+      pop.classList.add('open');
+      place();                                  // 先显示再量高（offsetHeight 才有值）
+      requestAnimationFrame(place);
+    }
+    function close() {
+      dd.classList.remove('open');
+      pop.classList.remove('open');
+    }
+    dd.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pop.classList.contains('open') ? close() : open();
+    });
+    dd.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pop.classList.contains('open') ? close() : open(); }
+      else if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!pop.classList.contains('open')) { open(); return; }
+        const n = sel.options.length;
+        if (n) {
+          let i = sel.selectedIndex + (e.key === 'ArrowDown' ? 1 : -1);
+          i = Math.max(0, Math.min(n - 1, i));
+          sel.selectedIndex = i; sync(); renderItems(); place();
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+    });
+    // 点外面关掉（下拉层挂在 body，得单独判一下是不是点在弹层里）
+    document.addEventListener('click', (e) => {
+      if (pop.contains(e.target) || dd.contains(e.target)) return;
+      close();
+    });
+    window.addEventListener('resize', close);
+    // 页面滚动时跟着关（fixed 定位不会自动跟走，留着会飘）
+    $$('.view').forEach((v) => v.addEventListener('scroll', close, { passive: true }));
+
+    /* 原生 select 被 JS 改了值 / 重建了选项时，自绘层要跟上。
+       setTheme / setIdle 这些是直接赋值 .value 的，不派发事件，
+       所以用 MutationObserver + 定时兜底同步显示。 */
+    new MutationObserver(() => { sync(); if (pop.classList.contains('open')) { renderItems(); place(); } })
+      .observe(sel, { childList: true, subtree: true, attributes: true });
+    sel.addEventListener('change', () => { sync(); if (pop.classList.contains('open')) renderItems(); });
+    // 有些地方是 obj.value = x 直接赋值（不触发事件），启动时和每次同步时都对一下
+    setInterval(() => {
+      const want = label();
+      if (dd.querySelector('.dd-t').textContent !== want) sync();
+    }, 400);
+
+    sync();
+  });
+}
+
 /* ---------------- 启动 ---------------- */
 bind();
+initSliders();              // 推理参数的滑条 ↔ 数字框绑定（顶层函数，applySettings 也用它）
+initDropdowns();            // 把 9 个原生下拉框换成自绘弹层（保留原 select 取值能力）
 // 恢复上次的用量仪表盘展开状态（默认折叠）
 try { setUsageExpanded(localStorage.getItem('cnm.usageExpanded') === '1'); } catch (e) { }
 // 提示文字里出现的「模型源」跟设置走，别写死
@@ -1860,6 +2316,27 @@ try { setUsageExpanded(localStorage.getItem('cnm.usageExpanded') === '1'); } cat
   if (el) el.textContent = '输入关键词搜索，源：' + hfHost() + '（在「设置 → 模型源」可改）';
 })();
 setModelTab('local');       // 默认打开左边（本地模型）
+initTips();                 // 给页面上所有 data-tip 元素接上自绘提示
+
+/* 全局兜底：新出现的 data-tip 元素自动接上自绘提示。
+   卡片、图表、上游列表都是 JS 动态重建的，逐个 render 里插一行容易漏；
+   用 MutationObserver 盯着，谁新来就给它挂上 —— 保证不再漏出黑色硬框。 */
+(function watchTips() {
+  if (!window.MutationObserver) return;
+  let queued = false;
+  const mo = new MutationObserver((muts) => {
+    let dirty = false;
+    for (const m of muts) {
+      if (m.type !== 'childList') continue;
+      for (const n of m.addedNodes) { if (n.nodeType === 1) { dirty = true; break; } }
+      if (dirty) break;
+    }
+    if (!dirty || queued) return;
+    queued = true;                 // 合并同一批 DOM 变更，别每个节点都跑一遍
+    requestAnimationFrame(() => { queued = false; initTips(); });
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+})();
 (async () => {
   try {
     const st = await call('state');
