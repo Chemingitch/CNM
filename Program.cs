@@ -56,8 +56,8 @@ internal static class Program
             bool light = args.Contains("--light");
             ApplicationConfiguration.Initialize();
 
-            var menu = TrayMenu.Create(out _, out _, out _);
-            menu.Items[1].Text = light ? "启动服务" : "停止服务";   // 两种状态都看一眼
+            var menu = TrayMenu.Create(out _, out _, out _, out _, out _);
+            menu.Items[2].Text = light ? "启动服务" : "停止服务";   // 两种状态都看一眼
             TrayMenu.ApplyTheme(menu, !light);
             menu.Show(new Point(60, 60));
             Application.DoEvents();

@@ -328,6 +328,82 @@ function fillSettings(s) {
   $('#setEngineMirror').value = s.engineMirror || '';
   $('#setHf').value = s.hfEndpoint || '';
   $('#setTheme').value = s.theme || 'dark';
+  $('#setHkToggle').value = s.hotkeyToggle || '';
+  $('#setHkNextModel').value = s.hotkeyNextModel || '';
+  $('#setHkUnload').value = s.hotkeyUnload || '';
+  renderHotkeyStatus(s.hotkeyStatus);
+}
+
+/**
+ * 快捷键状态灯：绿=已生效，红=被别的程序占用，灰=没设/不启用。
+ * 原因写在 tooltip 里（鼠标停上去看），界面上一律不堆文字。
+ */
+function renderHotkeyStatus(st) {
+  st = st || {};
+  const pairs = [
+    ['hkToggleState', st.toggle],
+    ['hkNextModelState', st.nextModel],
+    ['hkUnloadState', st.unload],
+  ];
+  pairs.forEach(([id, v]) => {
+    const el = $('#' + id);
+    if (!el) return;
+    const s = String(v || '');
+    if (!s) {
+      el.className = 'hk-led off';
+      el.setAttribute('data-tip', '没设这个快捷键');
+    } else if (s.startsWith('!')) {
+      el.className = 'hk-led bad';
+      el.setAttribute('data-tip', '没注册上：' + s.slice(1));
+    } else {
+      el.className = 'hk-led ok';
+      el.setAttribute('data-tip', s + ' · 生效中');
+    }
+  });
+}
+
+/** 把键盘事件转成 "Ctrl+Alt+C" 这种写法（点进输入框直接按组合键） */
+function hkFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Win');
+  const k = e.key;
+  // 只按了修饰键：还没按主键，先不填
+  if (['Control', 'Alt', 'Shift', 'Meta', 'OS'].includes(k)) return null;
+  let main = '';
+  if (k === ' ') main = 'Space';
+  else if (k === 'Escape') return '';                 // Esc = 清空这个快捷键
+  else if (k === 'Backspace') return '';
+  else if (k === 'ArrowUp') main = 'Up';
+  else if (k === 'ArrowDown') main = 'Down';
+  else if (k === 'ArrowLeft') main = 'Left';
+  else if (k === 'ArrowRight') main = 'Right';
+  else if (k.length === 1) main = k.toUpperCase();
+  else if (/^F\d{1,2}$/.test(k)) main = k;
+  else main = k;                                       // Enter / Tab / Home / Delete…
+  if (!main) return null;
+  // 光按字母/数字太容易误触，至少要有修饰键（F1-F24 除外，后端同样规则）
+  if (mods.length === 0 && !/^F\d{1,2}$/.test(main)) return null;
+  return mods.join('+') + (mods.length ? '+' : '') + main;
+}
+
+/** 规范化显示（只做大小写/顺序，不做严格校验——严格校验在后端） */
+function normalizeHk(v) {
+  const t = String(v || '').trim();
+  if (!t) return '';
+  return t.split('+').map((x) => {
+    const s = x.trim();
+    if (!s) return '';
+    const low = s.toLowerCase();
+    if (low === 'ctrl' || low === 'control') return 'Ctrl';
+    if (low === 'alt') return 'Alt';
+    if (low === 'shift') return 'Shift';
+    if (low === 'win' || low === 'super' || low === 'cmd') return 'Win';
+    if (s.length === 1) return s.toUpperCase();
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  }).filter(Boolean).join('+');
 }
 
 /* ---------------- 守望者：云端上游（API 中转站） ---------------- */
@@ -521,7 +597,10 @@ function collectSettings() {
     enginePath: $('#setEnginePath').value.trim(),
     engineMirror: $('#setEngineMirror').value.trim(),
     hfEndpoint: $('#setHf').value.trim() || 'https://hf-mirror.com',
-    theme: $('#setTheme').value
+    theme: $('#setTheme').value,
+    hotkeyToggle: normalizeHk($('#setHkToggle').value),
+    hotkeyNextModel: normalizeHk($('#setHkNextModel').value),
+    hotkeyUnload: normalizeHk($('#setHkUnload').value)
   };
 }
 
@@ -1534,6 +1613,36 @@ function bind() {
     await saveSettings('附加目录已加上 ' + dir + '，正在重新扫描…');
   });
   $('#btnSave').addEventListener('click', () => saveSettings('设置已保存'));
+
+  /* ---- 快捷键：点进输入框直接按组合键 ---- */
+  $$('.hk').forEach((el) => {
+    el.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      const hk = hkFromEvent(e);
+      if (hk === null) return;              // 只按了修饰键，等主键
+      el.value = hk;
+      el.classList.add('dirty');
+      S.dirty = true;
+    });
+    el.addEventListener('blur', () => { el.value = normalizeHk(el.value); });
+  });
+  $('#btnHkReset').addEventListener('click', () => {
+    $('#setHkToggle').value = 'Ctrl+Alt+C';
+    $('#setHkNextModel').value = 'Ctrl+Alt+N';
+    $('#setHkUnload').value = 'Ctrl+Alt+U';
+    S.dirty = true;
+    toast('已填回默认组合，点「保存设置」生效', 'info');
+  });
+  // 试一下：直接调后端动作（跟热键走的是同一条逻辑），验证功能而不是验证按键
+  $('#btnHkTestToggle').addEventListener('click', async () => {
+    try { await call('toggleWindow'); toast('已执行「呼出/退下」', 'ok'); } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#btnHkTestNext').addEventListener('click', async () => {
+    try {
+      const r = await call('cycleModel');
+      toast((r && r.message) || '已切换', r && r.ok ? 'ok' : 'error');
+    } catch (e) { toast(e.message, 'error'); }
+  });
 }
 
 /** 有改动没落盘：提醒一句（设置页只有「保存设置」这一键会真正存下来） */

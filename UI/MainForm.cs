@@ -16,6 +16,8 @@ public sealed class MainForm : Form
     private NotifyIcon _tray;
     private ContextMenuStrip _menu;
     private ToolStripMenuItem _miToggle;
+    private ToolStripMenuItem _miNextModel;
+    private ToolStripMenuItem _miUnload;
     private bool _exiting;
     private bool _webReady;
     private readonly Queue<string> _pending = new();   // 界面还没就绪就先攒着，就绪后补发（别丢）
@@ -55,6 +57,14 @@ public sealed class MainForm : Form
         _app.Toast += OnToast;
         _app.ThemeChanged += OnThemeChanged;
         _app.IconChanged += OnIconChanged;
+        _app.ToggleWindowRequested += () =>
+        {
+            try { if (IsHandleCreated) BeginInvoke(new Action(ToggleWindowFromHotkey)); } catch { }
+        };
+        _app.HotkeysChanged += () =>
+        {
+            try { if (IsHandleCreated) BeginInvoke(new Action(ApplyHotkeys)); } catch { }
+        };
 
         BuildTray();
     }
@@ -144,6 +154,7 @@ public sealed class MainForm : Form
         ApplyRoundedCorners();    // Win11 DWM 圆角（阴影圆）
         BuildTitleBar();          // 句柄就绪后 DeviceDpi 才准，按真实 DPI 重建一次
         ApplyWindowRegion();      // 硬裁剪兜底：DWM 不生效也保证四角是圆的
+        ApplyHotkeys();           // 全局快捷键（呼出/退下、切模型、卸载、服务开关）
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -157,8 +168,22 @@ public sealed class MainForm : Form
     private const int HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14,
                       HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
 
+    // 全局快捷键的 id（自己分配，只要互不相同）
+    private const int HK_TOGGLE = 0xC0A1, HK_NEXT_MODEL = 0xC0A2, HK_UNLOAD = 0xC0A3;
+
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == Hotkeys.WM_HOTKEY)
+        {
+            switch (m.WParam.ToInt32())
+            {
+                case HK_TOGGLE:      ToggleWindowFromHotkey(); return;
+                case HK_NEXT_MODEL:  _ = _app.CycleModelAsync(); return;
+                case HK_UNLOAD:      _ = _app.UnloadModelAsync(); return;
+            }
+            return;
+        }
+
         if (m.Msg == WM_NCHITTEST)
         {
             base.WndProc(ref m);
@@ -179,6 +204,70 @@ public sealed class MainForm : Form
             return;
         }
         base.WndProc(ref m);
+    }
+
+    /// <summary>呼出 / 退下：窗口已经在前台就收起来，否则显示并激活。</summary>
+    private void ToggleWindowFromHotkey()
+    {
+        try
+        {
+            // 「在不在用」的判据：窗口可见 + 没最小化 + 它是当前活动窗口。
+            // 只看 ContainsFocus 不够 —— 焦点可能落在 WebView2 子窗口上；
+            // 只看 IsForeground 也不够 —— 从脚本/别的进程唤起时 SetForegroundWindow 可能失败。
+            // 两个满足其一就算"在用"，否则算"没在用，该呼出"。
+            bool visible = Visible && WindowState != FormWindowState.Minimized;
+            bool active = visible && (ContainsFocus || Native.IsForeground(Handle));
+            if (active)
+            {
+                if (_app.Settings.CloseToTray) Hide();                       // 收进托盘（服务不断）
+                else WindowState = FormWindowState.Minimized;
+            }
+            else Restore();
+        }
+        catch { }
+    }
+
+    // ---------- 注册 / 重新注册快捷键 ----------
+    private void ApplyHotkeys()
+    {
+        var s = _app.Settings;
+        var st = _app.HotkeyState;
+        st.Clear();
+
+        void One(int id, string text, Action<string> set)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            if (Hotkeys.Register(Handle, id, text, out var why)) set(Hotkeys.Normalize(text));   // 空串 = 生效
+            else set("!" + why);                                                                 // "!原因" = 没生效
+        }
+
+        One(HK_TOGGLE, s.HotkeyToggle, v => st.Toggle = v);
+        One(HK_NEXT_MODEL, s.HotkeyNextModel, v => st.NextModel = v);
+        One(HK_UNLOAD, s.HotkeyUnload, v => st.Unload = v);
+
+        // 注册失败才提示，而且只在"真的失败"时说一次 ——
+        // 界面上的红灯 + 悬停已经能说明原因，Toast 只负责"你可能没注意到"。
+        var bad = new List<string>();
+        if (st.Toggle.StartsWith("!")) bad.Add("呼出/退下");
+        if (st.NextModel.StartsWith("!")) bad.Add("切换模型");
+        if (st.Unload.StartsWith("!")) bad.Add("卸载模型");
+        if (bad.Count > 0 && !_hkWarned)
+        {
+            _hkWarned = true;
+            _app.Notify("error", string.Join("、", bad) + " 的快捷键没注册上（设置 → 快捷键 那行红灯有原因）");
+        }
+        else if (bad.Count == 0) _hkWarned = false;
+
+        _app.PushStateNow();
+    }
+
+    private bool _hkWarned;
+
+    private void ClearHotkeys()
+    {
+        Hotkeys.Unregister(Handle, HK_TOGGLE);
+        Hotkeys.Unregister(Handle, HK_NEXT_MODEL);
+        Hotkeys.Unregister(Handle, HK_UNLOAD);
     }
 
     /// <summary>把逻辑尺寸按当前 DPI 换算成物理像素，并兜到屏幕工作区内</summary>
@@ -254,15 +343,15 @@ public sealed class MainForm : Form
             Visible = true
         };
 
-        var menu = TrayMenu.Create(out var miShow, out _miToggle, out var miExit);
+        var menu = TrayMenu.Create(out var miShow, out _miToggle, out var miNextModel, out var miUnload, out var miExit);
         miShow.Click += (_, _) => Restore();
-        _miToggle.Click += (_, _) =>
-        {
-            if (_app.Router.Running) _app.Router.Stop();
-            else _app.Router.Start();
-            RefreshTray();
-        };
+        _miToggle.Click += (_, _) => { _app.ToggleServer(); RefreshTray(); };
+        miNextModel.Click += (_, _) => _ = _app.CycleModelAsync();
+        miUnload.Click += (_, _) => _ = _app.UnloadModelAsync();
         miExit.Click += (_, _) => ExitApp();
+
+        _miNextModel = miNextModel;
+        _miUnload = miUnload;
 
         TrayMenu.ApplyTheme(menu, !IsLight);   // 菜单也跟主题，不要白底
         _menu = menu;
@@ -279,6 +368,9 @@ public sealed class MainForm : Form
             _miToggle.Text = _app.Router.Running ? "停止服务" : "启动服务";
             TrayMenu.SetToggleState(_miToggle, _app.Router.Running);
             _tray.Text = "CNM — " + (_app.Router.Running ? $"服务中 :{_app.Router.Port}" : "服务已停");
+            // 把快捷键写在菜单右边，用户一眼能想起按什么
+            if (_miNextModel != null) TrayMenu.SetShortcut(_miNextModel, _app.Settings.HotkeyNextModel);
+            if (_miUnload != null) TrayMenu.SetShortcut(_miUnload, _app.Settings.HotkeyUnload);
         }
         catch { }
     }
@@ -478,6 +570,7 @@ public sealed class MainForm : Form
             _app.Settings.WinHeight = (int)(ClientSize.Height / scale);
         }
         catch { }
+        ClearHotkeys();       // 不注销的话，进程还在退出途中这键还被占着（重开时注册会失败）
         _app.Shutdown();
         try { _tray.Visible = false; } catch { }
 

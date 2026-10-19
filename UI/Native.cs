@@ -12,6 +12,16 @@ internal static class Native
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hwnd, int cmd);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    /// <summary>这个窗口现在是不是前台活动窗口（快捷键「呼出/退下」靠它决定按下去该收还是该弹）</summary>
+    public static bool IsForeground(IntPtr hwnd)
+    {
+        try { return hwnd != IntPtr.Zero && GetForegroundWindow() == hwnd; }
+        catch { return false; }
+    }
+
     /// <summary>
     /// 确保主窗口真的显示出来。从脚本 / 计划任务 / 被隐藏启动的父进程拉起时，
     /// 子进程会继承 STARTUPINFO 的 SW_HIDE —— 界面"启动了但看不见"，这里补一刀。

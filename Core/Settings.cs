@@ -122,6 +122,18 @@ public sealed class Settings
     /// <summary>主题：dark / light</summary>
     public string Theme { get; set; } = "dark";
 
+    // ---------- 全局快捷键 ----------
+    // 写法："Ctrl+Alt+C"；空 = 不启用这个键。主键可以是 A-Z / 0-9 / F1-F24 / 方向键等。
+
+    /// <summary>呼出 / 退下主窗口（同一个键来回切）</summary>
+    public string HotkeyToggle { get; set; } = "Ctrl+Alt+C";
+
+    /// <summary>切换到下一个已装模型（在模型库里轮换，切到哪个就加载哪个）</summary>
+    public string HotkeyNextModel { get; set; } = "Ctrl+Alt+N";
+
+    /// <summary>卸载当前模型、把显存还回去</summary>
+    public string HotkeyUnload { get; set; } = "Ctrl+Alt+U";
+
     /// <summary>上次使用的模型 Id</summary>
     public string LastModelId { get; set; } = "";
 
@@ -199,6 +211,11 @@ public sealed class Settings
                 {
                     if (string.IsNullOrWhiteSpace(s.ApiKey)) s.ApiKey = NewKey();
                     if (string.IsNullOrWhiteSpace(s.ModelsDir)) s.ModelsDir = DefaultModelsDir();
+                    // 老配置里没有快捷键字段 → 反序列化后是 null（不是""），会被当成"用户主动清空"。
+                    // 用 ?? 补默认：只有真的没这个键（null）才填，用户手写的空串保持空。
+                    s.HotkeyToggle ??= "Ctrl+Alt+C";
+                    s.HotkeyNextModel ??= "Ctrl+Alt+N";
+                    s.HotkeyUnload ??= "Ctrl+Alt+U";
                     return s;
                 }
             }

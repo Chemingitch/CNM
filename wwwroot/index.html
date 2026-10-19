@@ -384,6 +384,34 @@
         <div class="kv"><label>模型源</label><input class="input grow" id="setHf" placeholder="https://hf-mirror.com"></div>
       </div>
 
+      <div class="panel">
+        <div class="panel-head"><b>快捷键（全局生效，程序在后台也管用）</b></div>
+        <div class="kv">
+          <label>呼出 / 退下</label>
+          <input class="input hk" style="max-width:190px" id="setHkToggle" placeholder="Ctrl+Alt+C">
+          <span class="hk-led" id="hkToggleState" data-tip=""></span>
+        </div>
+        <div class="kv">
+          <label>切换到下一个模型</label>
+          <input class="input hk" style="max-width:190px" id="setHkNextModel" placeholder="Ctrl+Alt+N">
+          <span class="hk-led" id="hkNextModelState" data-tip=""></span>
+        </div>
+        <div class="kv">
+          <label>卸载模型（放显存）</label>
+          <input class="input hk" style="max-width:190px" id="setHkUnload" placeholder="Ctrl+Alt+U">
+          <span class="hk-led" id="hkUnloadState" data-tip=""></span>
+        </div>
+        <div class="hint">
+          点进输入框直接<b>按组合键</b>就填好了（要带 Ctrl / Alt / Shift / Win 至少一个）。写 <code>Ctrl+Alt+C</code> 这样也行，清空 = 不启用。<br>
+          右边的灯：<b class="hk-ok">绿</b> = 已生效，<b class="hk-bad">红</b> = 被别的程序占用了，<b class="hk-off">灰</b> = 没设或不启用（鼠标停在灯上看原因）。保存后立刻生效。
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn ghost tiny" id="btnHkReset">恢复默认</button>
+          <button class="btn ghost tiny" id="btnHkTestToggle">试一下呼出/退下</button>
+          <button class="btn ghost tiny" id="btnHkTestNext">试一下切模型</button>
+        </div>
+      </div>
+
       <div class="row end">
         <button class="btn primary" id="btnSave">保存设置</button>
       </div>

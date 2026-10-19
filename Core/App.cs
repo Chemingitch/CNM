@@ -142,6 +142,77 @@ public sealed class App
         });
     }
 
+    // ---------- 全局快捷键的动作 ----------
+    // 每个动作都可从两处触发：系统热键（MainForm 的 WM_HOTKEY）和前端按钮（HandleAsync）。
+    // 逻辑放这里，两边共用，免得"按钮能用的功能热键里没有"。
+
+    /// <summary>呼出 / 退下主窗口（由 MainForm 订阅，热键和界面按钮都走这条）</summary>
+    public event Action ToggleWindowRequested;
+
+    /// <summary>设置改了快捷键 → 通知 MainForm 重新注册</summary>
+    public event Action HotkeysChanged;
+
+    /// <summary>切到下一个模型：在模型库里按顺序轮换。</summary>
+    public async Task<(bool ok, string message)> CycleModelAsync()
+    {
+        var models = Library.Models.Where(m => string.IsNullOrWhiteSpace(m.Error)).ToList();
+        if (models.Count == 0) return (false, "模型库里没有可用的模型，先扫描或下载一个");
+
+        int cur = -1;
+        var loaded = Engine.Loaded;
+        if (loaded != null)
+            cur = models.FindIndex(m => string.Equals(m.FilePath, loaded.FilePath, StringComparison.OrdinalIgnoreCase));
+
+        // 找不到当前（还没加载 / 加载的是被删掉的）就从第一个开始
+        var next = models[(cur + 1 + models.Count) % models.Count];
+        var r = await Engine.StartAsync(next);
+        if (r.Ok)
+        {
+            Settings.LastModelId = next.Id;
+            Settings.Save();
+            Toast?.Invoke("ok", "已切到 " + (next.Name.Length > 0 ? next.Name : next.Id));
+            return (true, "已切到 " + next.Id);
+        }
+        Toast?.Invoke("error", "切换失败：" + r.Message);
+        return (false, r.Message);
+    }
+
+    /// <summary>卸载当前模型（放显存）</summary>
+    public async Task<(bool ok, string message)> UnloadModelAsync()
+    {
+        if (!Engine.IsRunning) return (false, "现在没有模型在跑");
+        await Engine.StopAsync();
+        Toast?.Invoke("ok", "已卸载模型，显存还回去了（下次请求会自动加载）");
+        return (true, "已卸载");
+    }
+
+    /// <summary>对外服务开 / 关</summary>
+    public (bool ok, string message) ToggleServer()
+    {
+        if (Router.Running) { Router.Stop(); Toast?.Invoke("info", "已停止对外服务"); return (true, "已停止服务"); }
+        Router.Start();
+        if (!Router.Running) { Toast?.Invoke("error", "启动失败：" + Router.LastError); return (false, Router.LastError); }
+        Toast?.Invoke("ok", "服务已启动 · 端口 " + Router.Port);
+        return (true, "已启动服务");
+    }
+
+    /// <summary>快捷键注册结果（给界面标"生效/被占用"用）</summary>
+    public readonly HotkeyStatus HotkeyState = new();
+
+    /// <summary>给界面弹个提示（外部只能走这里，事件不能从类外 Invoke）</summary>
+    public void Notify(string kind, string message) => Toast?.Invoke(kind, message);
+
+    /// <summary>立刻推一次状态（快捷键注册完要让界面刷新"生效/被占用"标记）</summary>
+    public void PushStateNow() => PushState();
+
+    public sealed class HotkeyStatus
+    {
+        public string Toggle { get; set; } = "";
+        public string NextModel { get; set; } = "";
+        public string Unload { get; set; } = "";
+        public void Clear() { Toggle = NextModel = Unload = ""; }
+    }
+
     public void StartUp()
     {
         _ = Task.Run(async () =>
@@ -250,6 +321,16 @@ public sealed class App
         ["hfEndpoint"] = Settings.HfEndpoint,
         ["closeToTray"] = Settings.CloseToTray,
         ["theme"] = Settings.Theme,
+        ["hotkeyToggle"] = Settings.HotkeyToggle,
+        ["hotkeyNextModel"] = Settings.HotkeyNextModel,
+        ["hotkeyUnload"] = Settings.HotkeyUnload,
+        // 注册结果：界面用它标出「哪些键真的生效了」（被别的程序占用时注册会失败）
+        ["hotkeyStatus"] = new JsonObject
+        {
+            ["toggle"] = HotkeyState.Toggle,
+            ["nextModel"] = HotkeyState.NextModel,
+            ["unload"] = HotkeyState.Unload,
+        },
         ["upstreams"] = new JsonArray(Settings.Upstreams.Select(u => (JsonNode)new JsonObject
         {
             ["name"] = u.Name,
@@ -829,6 +910,29 @@ public sealed class App
                 catch (Exception ex) { return Err(ex.Message); }
             }
 
+            // ---- 快捷键动作（系统热键和界面按钮共用同一套逻辑）----
+            case "cycleModel":
+            {
+                var r = await CycleModelAsync();
+                return new JsonObject { ["ok"] = r.ok, ["message"] = r.message };
+            }
+
+            case "unloadModel":
+            {
+                var r = await UnloadModelAsync();
+                return new JsonObject { ["ok"] = r.ok, ["message"] = r.message };
+            }
+
+            case "toggleServer":
+            {
+                var r = ToggleServer();
+                return new JsonObject { ["ok"] = r.ok, ["message"] = r.message };
+            }
+
+            case "toggleWindow":
+                ToggleWindowRequested?.Invoke();
+                return new JsonObject { ["ok"] = true };
+
             case "clearLog":
             {
                 // 「清空」按钮：光清界面没用 —— 日志还在往文件里追加，重启就全回来了。
@@ -924,6 +1028,9 @@ public sealed class App
         Settings.HfEndpoint = Str("hfEndpoint", Settings.HfEndpoint);
         Settings.CloseToTray = Bool("closeToTray", Settings.CloseToTray);
         Settings.Theme = Str("theme", Settings.Theme);
+        Settings.HotkeyToggle = Str("hotkeyToggle", Settings.HotkeyToggle).Trim();
+        Settings.HotkeyNextModel = Str("hotkeyNextModel", Settings.HotkeyNextModel).Trim();
+        Settings.HotkeyUnload = Str("hotkeyUnload", Settings.HotkeyUnload).Trim();
         Settings.UpstreamDefault = Str("upstreamDefault", Settings.UpstreamDefault).Trim();
         Settings.UpstreamModel = Str("upstreamModel", Settings.UpstreamModel).Trim();
 
@@ -948,6 +1055,7 @@ public sealed class App
             Router.Start();
         }
         ThemeChanged?.Invoke(Settings.Theme);
+        HotkeysChanged?.Invoke();      // 快捷键可能改了：让窗口重新注册（旧键要先注销掉）
         PushState();
     }
 

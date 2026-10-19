@@ -169,7 +169,33 @@ nav { display: flex; flex-direction: column; gap: 4px; }
   background: linear-gradient(135deg, rgba(91,140,255,.18), rgba(138,92,255,.14));
   color: var(--text); box-shadow: inset 0 0 0 1px rgba(91,140,255,.28);
 }
-.side-foot { margin-top: auto; padding: 10px 6px 2px; border-top: 1px solid var(--line); }.mini { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-foot { margin-top: auto; padding: 10px 6px 2px; border-top: 1px solid var(--line); }
+
+/* 快捷键输入框：点进去直接按组合键 */
+.input.hk { font-family: "Cascadia Mono", Consolas, monospace; letter-spacing: .4px; cursor: pointer; }
+.input.hk:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,140,255,.16); }
+.input.hk.dirty { border-color: var(--warn); }
+
+/* 快捷键状态灯：绿=生效，红=被占用，灰=没设/不启用 */
+.hk-led { position: relative; width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--line2); cursor: default; transition: background .15s, box-shadow .15s; }
+.hk-led::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; bottom: calc(100% + 9px); transform: translateX(-50%) translateY(4px);
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line2);
+  border-radius: 8px; padding: 5px 9px; font-size: 11px; white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none; z-index: 70;
+  box-shadow: 0 8px 20px rgba(0,0,0,.35);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+}
+.hk-led[data-tip]:not([data-tip=""])::after { content: attr(data-tip); }
+.hk-led:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+.hk-led.ok { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
+.hk-led.bad { background: var(--err); box-shadow: 0 0 7px var(--err); }
+.hk-led.off { background: var(--line2); }
+.hk-ok { color: var(--ok); }
+.hk-bad { color: var(--err); }
+.hk-off { color: var(--muted); }.mini { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini.sub { color: var(--muted); }
 
 /* 模型名：hover 向上弹气泡显示全称 + logo */

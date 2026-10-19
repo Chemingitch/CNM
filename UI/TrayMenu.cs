@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
+using CNM.Core;
 
 namespace CNM.UI;
 
@@ -116,6 +117,28 @@ internal static class TrayMenu
                 g.DrawLine(pen, cx, m - 0.4f, cx, cy - r * 0.45f);
                 break;
 
+            case "next":          // 切换模型：三角 + 竖线（跳到下一个）
+                g.FillPolygon(brush, new[]
+                {
+                    new PointF(m + 0.6f, m - 0.2f),
+                    new PointF(s / 2f + 1.2f, s / 2f),
+                    new PointF(m + 0.6f, s - m + 0.2f),
+                });
+                using (var path = RoundRect(new RectangleF(s / 2f + 2.4f, m - 0.2f, 2.2f, s - 2 * m + 0.4f), 1f))
+                    g.FillPath(brush, path);
+                break;
+
+            case "eject":         // 卸载：上三角 + 底座横线
+                g.FillPolygon(brush, new[]
+                {
+                    new PointF(s / 2f, m - 0.2f),
+                    new PointF(s - m + 0.2f, s / 2f + 0.6f),
+                    new PointF(m - 0.2f, s / 2f + 0.6f),
+                });
+                using (var path = RoundRect(new RectangleF(m - 0.2f, s / 2f + 2.6f, s - 2 * m + 0.4f, 2.4f), 1.2f))
+                    g.FillPath(brush, path);
+                break;
+
             default:
                 using (var path = RoundRect(new RectangleF(m, m, s - 2 * m, s - 2 * m), 3f))
                     g.DrawPath(pen, path);
@@ -215,7 +238,8 @@ internal static class TrayMenu
     }
 
     /// <summary>建一套托盘菜单（界面和预览共用，保证两处长得一样）</summary>
-    public static ContextMenuStrip Create(out ToolStripMenuItem miShow, out ToolStripMenuItem miToggle, out ToolStripMenuItem miExit)
+    public static ContextMenuStrip Create(out ToolStripMenuItem miShow, out ToolStripMenuItem miToggle,
+        out ToolStripMenuItem miNextModel, out ToolStripMenuItem miUnload, out ToolStripMenuItem miExit)
     {
         var menu = new ContextMenuStrip
         {
@@ -228,10 +252,15 @@ internal static class TrayMenu
 
         miShow = new ToolStripMenuItem("显示主界面") { Padding = new Padding(6, 5, 14, 5), Tag = "show" };
         miToggle = new ToolStripMenuItem("启动服务") { Padding = new Padding(6, 5, 14, 5), Tag = "toggle" };
+        miNextModel = new ToolStripMenuItem("切换到下一个模型") { Padding = new Padding(6, 5, 14, 5), Tag = "nextmodel" };
+        miUnload = new ToolStripMenuItem("卸载模型") { Padding = new Padding(6, 5, 14, 5), Tag = "unload" };
         miExit = new ToolStripMenuItem("退出 CNM") { Padding = new Padding(6, 5, 14, 5), Tag = "exit" };
 
         menu.Items.Add(miShow);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(miToggle);
+        menu.Items.Add(miNextModel);
+        menu.Items.Add(miUnload);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(miExit);
 
@@ -239,6 +268,8 @@ internal static class TrayMenu
         var c0 = Color.FromArgb(0xE7, 0xEB, 0xF3);
         miShow.Image = DrawIcon("show", c0);
         miToggle.Image = DrawIcon("play", c0);
+        miNextModel.Image = DrawIcon("next", c0);
+        miUnload.Image = DrawIcon("eject", c0);
         miExit.Image = DrawIcon("exit", c0);
 
         if (IsWin11)
@@ -276,6 +307,8 @@ internal static class TrayMenu
                 {
                     "show" => "show",
                     "exit" => "exit",
+                    "nextmodel" => "next",
+                    "unload" => "eject",
                     "toggle" => mi.Text.Contains("停止") ? "stop" : "play",
                     _ => null,
                 };
@@ -294,5 +327,13 @@ internal static class TrayMenu
         var c = mi.ForeColor;
         var dim = Color.FromArgb(150, c.R, c.G, c.B);   // 图标比文字暗一档，不抢眼
         mi.Image = DrawIcon(running ? "stop" : "play", dim);
+    }
+
+    /// <summary>在菜单项右边显示这个动作的快捷键（没设就不显示）</summary>
+    public static void SetShortcut(ToolStripMenuItem mi, string hotkey)
+    {
+        if (mi == null) return;
+        var norm = Hotkeys.Normalize(hotkey ?? "");
+        mi.ShortcutKeyDisplayString = norm.Length > 0 ? norm : null;
     }
 }
