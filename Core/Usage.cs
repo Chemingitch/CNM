@@ -15,6 +15,10 @@ public sealed class UsageDay
     public int Up { get; set; }
     /// <summary>返回过错误的次数（4xx/5xx）</summary>
     public int Fail { get; set; }
+    /// <summary>本地引擎返回过错误的次数（失败里属于"走本地"的那部分）</summary>
+    public int FailLocal { get; set; }
+    /// <summary>云端上游返回过错误的次数（失败里属于"走外地"的那部分）</summary>
+    public int FailUp { get; set; }
     /// <summary>回给 agent 的字节数</summary>
     public long Bytes { get; set; }
     /// <summary>累计耗时（毫秒）</summary>
@@ -128,17 +132,34 @@ public sealed class UsageStats
                 foreach (var kv in days)
                 {
                     if (kv.Value is not JsonObject d) continue;
-                    _days[kv.Key] = new UsageDay
+                    var day = new UsageDay
                     {
                         Req = (int?)d["Req"] ?? 0,
                         Local = (int?)d["Local"] ?? 0,
                         Up = (int?)d["Up"] ?? 0,
                         Fail = (int?)d["Fail"] ?? 0,
+                        FailLocal = (int?)d["FailLocal"] ?? 0,
+                        FailUp = (int?)d["FailUp"] ?? 0,
                         Bytes = (long?)d["Bytes"] ?? 0,
                         Ms = (long?)d["Ms"] ?? 0,
                         PromptTok = (long?)d["PromptTok"] ?? 0,
                         ComplTok = (long?)d["ComplTok"] ?? 0
                     };
+                    // 旧数据没存过「失败按本地/外地拆」这一对字段 —— 那时候还没有条形图。
+                    // ⚠️ 判据不能看「键在不在」：新代码 Save 时会把两个键都写成 0，
+                    //    于是"键存在但两项相加 ≠ 总数"，用 ContainsKey 判断会永远跳过修复。
+                    //    正确判据 = 两项相加和总失败数对不对得上。
+                    if (day.Fail > 0 && day.FailLocal + day.FailUp != day.Fail)
+                    {
+                        int tot = day.Local + day.Up;
+                        if (tot > 0)
+                        {
+                            day.FailLocal = (int)Math.Round((double)day.Fail * day.Local / tot);
+                            day.FailUp = day.Fail - day.FailLocal;
+                        }
+                        else day.FailLocal = day.Fail;      // 分不出来就都算本地（罕见）
+                    }
+                    _days[kv.Key] = day;
                 }
                 // 老数据里没有 firstSeen：拿最早那天当起点（比"今天"更符合事实）
                 if (_days.Count > 0)
@@ -167,6 +188,8 @@ public sealed class UsageStats
                         ["Local"] = kv.Value.Local,
                         ["Up"] = kv.Value.Up,
                         ["Fail"] = kv.Value.Fail,
+                        ["FailLocal"] = kv.Value.FailLocal,
+                        ["FailUp"] = kv.Value.FailUp,
                         ["Bytes"] = kv.Value.Bytes,
                         ["Ms"] = kv.Value.Ms,
                         ["PromptTok"] = kv.Value.PromptTok,
@@ -204,7 +227,12 @@ public sealed class UsageStats
             if (!_days.TryGetValue(key, out var d)) { d = new UsageDay(); _days[key] = d; }
             d.Req++;
             if (upstream) d.Up++; else d.Local++;
-            if (status >= 400) d.Fail++;
+            if (status >= 400)
+            {
+                d.Fail++;
+                // 失败再按"走本地/走外地"拆开：条形图要画「本地/本地失败/外地/外地失败」四段
+                if (upstream) d.FailUp++; else d.FailLocal++;
+            }
             if (bytes > 0) d.Bytes += bytes;
             if (ms > 0) d.Ms += ms;
             if (promptTok > 0) d.PromptTok += promptTok;
@@ -223,6 +251,7 @@ public sealed class UsageStats
     private static void Merge(UsageDay to, UsageDay from)
     {
         to.Req += from.Req; to.Local += from.Local; to.Up += from.Up; to.Fail += from.Fail;
+        to.FailLocal += from.FailLocal; to.FailUp += from.FailUp;
         to.Bytes += from.Bytes; to.Ms += from.Ms;
         to.PromptTok += from.PromptTok; to.ComplTok += from.ComplTok;
     }
@@ -233,6 +262,8 @@ public sealed class UsageStats
         ["local"] = d.Local,
         ["up"] = d.Up,
         ["fail"] = d.Fail,
+        ["failLocal"] = d.FailLocal,
+        ["failUp"] = d.FailUp,
         ["bytes"] = d.Bytes,
         ["ms"] = d.Ms,
         ["pt"] = d.PromptTok,

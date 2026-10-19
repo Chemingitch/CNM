@@ -12,7 +12,6 @@ public sealed class MainForm : Form
 
     private readonly App _app;
     private readonly WebView2 _web;
-    private Panel _tb;      // 自绘拖动条（无系统边框；窗口按钮在网页顶栏）
     private NotifyIcon _tray;
     private ContextMenuStrip _menu;
     private ToolStripMenuItem _miToggle;
@@ -43,15 +42,16 @@ public sealed class MainForm : Form
         // 无系统标题栏：界面自己画标题栏。
         // 窗口四角由 DWM 原生圆角负责（带抗锯齿）；拖边缩放靠 WndProc 的 WM_NCHITTEST。
         FormBorderStyle = FormBorderStyle.None;
+        // ⚠️ 这 8px 边距不能省：WebView2 铺满客户区时会吃掉所有鼠标消息，
+        //    鼠标永远到不了 Form，WM_NCHITTEST 就没机会判「这是窗口边」→ 拖不了边。
+        //    留着这一圈，鼠标落在上面时命中的才是 Form 自己。
+        //    半径也按 8px：太小抓不住（用户反馈过"能拖的位置太少"）。
+        Padding = new Padding(8);
 
-        // Dock 顺序很关键：先加 Fill（WebView2）再加 Top（标题栏），
-        // 否则 Fill 会盖住标题栏右侧的窗口按钮。
+        // 网页顶栏本身就是拖动区（不再单独加一条 WinForms 黑条 —— 那条黑边很丑）。
+        // WebView2 会把鼠标消息全吃掉，所以由网页那边发 startDrag 消息，这里换成系统拖动。
         _web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
         Controls.Add(_web);
-
-        _tb = new Panel { Dock = DockStyle.Top, Height = 38 };
-        BuildTitleBar();
-        Controls.Add(_tb);
 
         _app.Send += OnSend;
         _app.Toast += OnToast;
@@ -118,17 +118,25 @@ public sealed class MainForm : Form
         ApplyWindowRegion();      // 跟随尺寸 / 最大化 / 还原
     }
 
-    private void BuildTitleBar()
+    /// <summary>
+    /// 网页顶栏发来「我要拖窗口」时，换成系统级拖动。
+    /// 为什么不在网页里用 app-region:drag —— WebView2 不支持那个属性（实测无效），
+    /// 只能走这条 IPC：网页捕获 mousedown → 发 startDrag → 这里 ReleaseCapture + WM_NCLBUTTONDOWN。
+    /// 这样顶栏本身就能拖，不用额外加一条又黑又丑的 WinForms 拖动条。
+    /// </summary>
+    private void StartWindowDrag()
     {
-        // 只留一条细拖动条贴着窗口顶（窗口按钮在网页顶栏里，走 windowMinimize 等消息）
-        float sc = Math.Max(1f, DeviceDpi / 96f);
-        _tb.BackColor = IsLight ? Color.FromArgb(238, 241, 246) : Color.FromArgb(14, 16, 20);
-        _tb.Height = (int)Math.Round(12 * sc);
-
-        _tb.MouseDown -= OnTitleBarDrag;
-        _tb.MouseDown += OnTitleBarDrag;
-        _tb.DoubleClick -= OnTitleBarDoubleClick;
-        _tb.DoubleClick += OnTitleBarDoubleClick;
+        try
+        {
+            if (WindowState == FormWindowState.Maximized)
+            {
+                // 最大化的窗口拖动：先还原，再按鼠标位置移动（跟系统行为一致）
+                WindowState = FormWindowState.Normal;
+            }
+            ReleaseCapture();
+            SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+        }
+        catch { }
     }
 
     private void ToggleMaximize()
@@ -137,22 +145,12 @@ public sealed class MainForm : Form
         WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
     }
 
-    private void OnTitleBarDrag(object s, MouseEventArgs e)
-    {
-        if (e.Button != MouseButtons.Left) return;
-        ReleaseCapture();
-        SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
-    }
-
-    private void OnTitleBarDoubleClick(object s, EventArgs e) => ToggleMaximize();
-
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
         ApplyWindowSize();
         ApplyTitleBarTheme();
         ApplyRoundedCorners();    // Win11 DWM 圆角（阴影圆）
-        BuildTitleBar();          // 句柄就绪后 DeviceDpi 才准，按真实 DPI 重建一次
         ApplyWindowRegion();      // 硬裁剪兜底：DWM 不生效也保证四角是圆的
         ApplyHotkeys();           // 全局快捷键（呼出/退下、切模型、卸载、服务开关）
     }
@@ -190,7 +188,9 @@ public sealed class MainForm : Form
             if (m.Result != (IntPtr)1) return;             // 1 = HTCLIENT，只有客户区才继续判
             long lp = m.LParam.ToInt64();
             var p = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
-            int edge = 5;
+            // 8px：5px 太窄，鼠标不好瞄准（用户反馈"能拖的位置太少"）。
+            // 四周留白也是 8px（见构造里的 Padding），两边对得上才不会出现"看得见却拖不动"的带。
+            int edge = 8;
             bool l = p.X <= edge, r = p.X >= ClientSize.Width - edge;
             bool t = p.Y <= edge, b = p.Y >= ClientSize.Height - edge;
             if (t && l) m.Result = (IntPtr)HTTOPLEFT;
@@ -294,7 +294,6 @@ public sealed class MainForm : Form
             if (IsHandleCreated) BeginInvoke(new Action(() =>
             {
                 ApplyTitleBarTheme();
-                BuildTitleBar();                                 // 自绘标题栏跟随主题
                 BackColor = IsLight ? LightBg : DarkBg;
                 if (_web != null) _web.DefaultBackgroundColor = BackColor;
             }));
@@ -465,6 +464,9 @@ public sealed class MainForm : Form
 
         // 无边框窗口：最小化 / 最大化 / 关闭 由界面上的按钮发过来
         if (cmd == "windowMinimize") { WindowState = FormWindowState.Minimized; Reply(reqId, true, null, null); return; }
+        // 网页顶栏按住时发这个：换成系统拖动（WebView2 不支持 app-region:drag）
+        if (cmd == "startDrag") { StartWindowDrag(); Reply(reqId, true, null, null); return; }
+        if (cmd == "windowToggleMaximize") { ToggleMaximize(); Reply(reqId, true, null, null); return; }
         if (cmd == "windowMaximize")
         {
             // 用工作区做最大化边界，别盖住任务栏

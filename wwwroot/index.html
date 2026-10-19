@@ -170,10 +170,16 @@
           <div class="ug-spark" id="ugSpark"></div>
         </div>
 
-        <!-- 展开态：完整数字 + 柱状图 + 说明 -->
+        <!-- 展开态：完整数字 + 左环形（占比）+ 右柱形（各时段明细）+ 说明 -->
         <div class="usage-full" id="usageFull">
           <div class="usage-totals" id="usageTotals">—</div>
-          <div class="usage-bars" id="usageBars"></div>
+          <div class="usage-board">
+            <div class="usage-chart" id="usageChart"></div>
+            <div class="usage-side">
+              <div class="usage-side-ttl" id="usageColTtl">各时段明细</div>
+              <div class="usage-cols" id="usageCols"></div>
+            </div>
+          </div>
           <div class="hint" id="usageHint">—</div>
         </div>
       </div>

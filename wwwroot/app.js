@@ -759,13 +759,13 @@ function setUsageTab(t) {
 }
 
 function renderUsage() {
-  const box = $('#usageBars');
   const totals = $('#usageTotals');
-  if (!box || !totals) return;
+  const chart = $('#usageChart');
+  if (!chart || !totals) return;
   const u = S.usage;
   if (!u) {
     totals.textContent = '—';
-    box.innerHTML = '';
+    chart.innerHTML = '';
     renderUsageGlance({}, [], '今天');      // 没数据也要把折叠态刷成「—」，别留着上次的旧数字
     return;
   }
@@ -775,7 +775,6 @@ function renderUsage() {
   const t = u[pair[0]] || {};
   const series = u[pair[1]] || [];
   const name = tab === 'day' ? '今天' : tab === 'month' ? '本月' : '今年';
-
   totals.innerHTML =
     '<span class="ut-big">' + fmtNum(t.req) + '</span><span class="ut-unit">次调用（' + name + '）</span>' +
     '<span class="ut-sep"></span>' +
@@ -789,22 +788,8 @@ function renderUsage() {
     '<span class="ut-kv">平均 <b>' + fmtDur(t.req ? (t.ms || 0) / t.req : 0) + '</b></span>' +
     '<span class="ut-kv">回传 <b>' + fmtBytes(t.bytes) + '</b></span>';
 
-  const max = Math.max(1, ...series.map((d) => +d.req || 0));
-  box.innerHTML = series.map((d) => {
-    const req = +d.req || 0;
-    const h = Math.round((req / max) * 100);
-    const hl = req ? Math.round(((+d.local || 0) / req) * 100) : 0;
-    const tip = d.k + '：' + req + ' 次（本地 ' + (+d.local || 0) + ' / 外地 ' + (+d.up || 0) + '）' +
-      (((+d.pt || 0) + (+d.ct || 0)) > 0 ? ' · token 输入 ' + d.pt + ' / 输出 ' + d.ct : '') +
-      ' · 回传 ' + fmtBytes(d.bytes);
-    return '<div class="ubar" title="' + esc(tip) + '">' +
-      '<div class="ubar-v">' + (req ? req : '') + '</div>' +
-      '<div class="ubar-track"><div class="ubar-fill" style="height:' + h + '%">' +
-        '<i class="ubar-loc" style="height:' + hl + '%"></i>' +
-        '<i class="ubar-up" style="height:' + (req ? 100 - hl : 0) + '%"></i>' +
-      '</div></div>' +
-      '<div class="ubar-l">' + esc(d.l || d.k) + '</div></div>';
-  }).join('');
+
+  renderUsageChart(series, t, name);
 
   const tt = u.total || {};
   $('#usageHint').textContent = '累计 ' + fmtNum(tt.req) + ' 次（本地 ' + fmtNum(tt.local) + ' / 外地 ' + fmtNum(tt.up) + '）' +
@@ -816,7 +801,96 @@ function renderUsage() {
   renderUsageGlance(t, series, name);
 }
 
-/** 折叠态仪表盘：一行关键数字 + 右侧迷你火花线（点任意处展开） */
+/* ── 展开态图表：环形 ──
+   设计要求（用户定的）：
+     · 折叠时看柱状（圆润、含失败），展开时看环形
+     · 弧端要圆头，不要平切
+     · 配色跟折叠柱状共用一套渐变，展开/收起是同一个视觉语言
+     · 把「失败」也画进去 —— 它是最该被看见的一项
+   两层环：外环＝本地/外地（走哪儿），内环＝成功/失败（行不行）。纯 SVG，零依赖。 */
+function renderUsageChart(series, totals, period) {
+  const host = $('#usageChart');
+  if (!host) return;
+
+  const loc = +totals.local || 0, up = +totals.up || 0;
+  const fail = +totals.fail || 0;
+  const sum = loc + up;                       // 注意：失败已含在 req 里，别重复加
+  const req = +totals.req || sum;
+  const ok = Math.max(0, req - fail);
+
+  const SZ = 216, cx = 108, cy = 106;
+  const R1 = 80, W1 = 21;                     // 外环：本地/外地
+  const R2 = 49, W2 = 13;                     // 内环：成功/失败
+
+  if (req === 0) {
+    host.innerHTML = '<div class="csvg-empty">这段时间还没有调用。外面有 agent 调进来时这里就开始记了。</div>';
+    return;
+  }
+
+  // ⚠️ 必须 userSpaceOnUse：默认的 objectBoundingBox 渐变在「零包围盒」的元素上不渲染
+  const defs = '<defs>' +
+    '<linearGradient id="uLoc" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + SZ + '" y2="' + SZ + '">' +
+      '<stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#8a5cff"/></linearGradient>' +
+    '<linearGradient id="uUp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + SZ + '" y2="' + SZ + '">' +
+      '<stop offset="0" stop-color="#c07bff"/><stop offset="1" stop-color="#7c5cff"/></linearGradient>' +
+    '<linearGradient id="uOk" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + SZ + '" y2="' + SZ + '">' +
+      '<stop offset="0" stop-color="#35c98a"/><stop offset="1" stop-color="#2fb87d"/></linearGradient>' +
+    '<linearGradient id="uErr" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + SZ + '" y2="' + SZ + '">' +
+      '<stop offset="0" stop-color="#ff7b7b"/><stop offset="1" stop-color="#e5484d"/></linearGradient>' +
+    '</defs>';
+
+  /** 圆头弧：stroke-dasharray + linecap=round，两端天然是圆的（不是平切） */
+  function arc(r, w, from, to, paint) {
+    const GAP = 0.012;                        // 段间留一点缝，两段才不糊在一起
+    let f0 = from + GAP / 2, t0 = to - GAP / 2;
+    if (t0 <= f0) return '';
+    const C = 2 * Math.PI * r;
+    const len = (t0 - f0) * C;
+    // 接近整圈时圆头会在起点叠出一截，改成不带圆端的整圆
+    if (len >= C * 0.995) {
+      return '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + paint + '" stroke-width="' + w + '"/>';
+    }
+    return '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + paint + '"' +
+      ' stroke-width="' + w + '" stroke-linecap="round"' +
+      ' stroke-dasharray="' + len.toFixed(2) + ' ' + (C - len).toFixed(2) + '"' +
+      ' stroke-dashoffset="' + (-f0 * C).toFixed(2) + '"' +
+      ' transform="rotate(-90 ' + cx + ' ' + cy + ')"/>';
+  }
+
+  const lf = sum ? loc / sum : 0;
+  let s = defs;
+  s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + R1 + '" fill="none" stroke="var(--line)" stroke-width="' + W1 + '"/>';   // 轨道
+  s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + R2 + '" fill="none" stroke="var(--line)" stroke-width="' + W2 + '"/>';
+  if (sum > 0) {                              // 外环：本地 / 外地
+    s += arc(R1, W1, 0, lf, 'url(#uLoc)');
+    if (1 - lf > 0.001) s += arc(R1, W1, lf, 1, 'url(#uUp)');
+  }
+  if (fail > 0) {                             // 内环：成功 / 失败
+    s += arc(R2, W2, 0, ok / req, 'url(#uOk)');
+    s += arc(R2, W2, ok / req, 1, 'url(#uErr)');
+  } else {
+    s += arc(R2, W2, 0, 1, 'url(#uOk)');
+  }
+  s += '<text x="' + cx + '" y="' + (cy - 3) + '" class="dn-num">' + fmtNum(req) + '</text>';
+  s += '<text x="' + cx + '" y="' + (cy + 15) + '" class="dn-lab">' + (period ? '次调用 · ' + period : '次调用') + '</text>';
+
+  const pct = (v) => (req ? (v / req * 100).toFixed(0) : '0');
+  const legend =
+    '<div class="dn-legend">' +
+      '<div class="dn-row"><i class="lg-dot loc"></i><span class="dn-k">本地</span>' +
+        '<b>' + fmtNum(loc) + '</b><span class="dn-p">' + pct(loc) + '%</span></div>' +
+      '<div class="dn-row"><i class="lg-dot up"></i><span class="dn-k">外地</span>' +
+        '<b>' + fmtNum(up) + '</b><span class="dn-p">' + pct(up) + '%</span></div>' +
+      '<div class="dn-sep"></div>' +
+      '<div class="dn-row"><i class="lg-dot ok"></i><span class="dn-k">成功</span>' +
+        '<b>' + fmtNum(ok) + '</b><span class="dn-p">' + pct(ok) + '%</span></div>' +
+      '<div class="dn-row' + (fail > 0 ? ' bad' : '') + '"><i class="lg-dot err"></i><span class="dn-k">失败</span>' +
+        '<b>' + fmtNum(fail) + '</b><span class="dn-p">' + pct(fail) + '%</span></div>' +
+    '</div>';
+
+  host.innerHTML = '<svg viewBox="0 0 ' + SZ + ' ' + SZ + '" class="cdonut">' + s + '</svg>' + legend;
+}
+/** 折叠态仪表盘：一行关键数字 + 右侧条明细；同时把展开态右栏的条也刷新了（共用一套渲染） */
 function renderUsageGlance(t, series, name) {
   const set = (id, v) => { const e = $('#' + id); if (e) e.textContent = v; };
   set('ugReq', fmtNum(t.req));
@@ -833,22 +907,87 @@ function renderUsageGlance(t, series, name) {
   set('ugTok', tok > 0 ? fmtNum(tok) : '—');
   set('ugAvg', t.req ? fmtDur((t.ms || 0) / t.req) : '—');
 
-  // 火花线：近 48 根，按最大值归一；没请求的那天给 2px 基线
-  const spark = $('#ugSpark');
-  if (spark) {
-    const arr = (series || []).slice(-48);
-    const mx = Math.max(1, ...arr.map((d) => +d.req || 0));
-    spark.innerHTML = arr.map((d) => {
-      const req = +d.req || 0;
-      const h = req ? Math.max(8, Math.round((req / mx) * 100)) : 0;
-      const title = d.k + '：' + req + ' 次（本地 ' + (+d.local || 0) + ' / 外地 ' + (+d.up || 0) + '）';
-      return '<div class="ug-b' + (req ? '' : ' zero') + '" style="height:' + (req ? h + '%' : '2px') + '" title="' + esc(title) + '"></div>';
-    }).join('');
-  }
+  // 折叠态区域右侧：本地 / 外地两条（失败并进条内）
+  renderUsageBars($('#ugSpark'), t);
+  // 展开态右栏：柱形图（各时段一根，跟折叠态那两条不是一个东西，故分开画）
+  renderUsageCols($('#usageCols'), series, name);
 }
 
-/** 折叠 / 展开用量仪表盘（状态记 localStorage，下次打开保持） */
-function setUsageExpanded(on) {
+/**
+ * 展开态右栏：柱形图 —— 每个时段一组，组内三根**各自独立**的柱子（本地 / 失败 / 外地）。
+ * ⚠️ 不要把三段堆进同一根柱子里：堆叠看不出"哪一项多"，拆开并排才能一眼比。
+ */
+function renderUsageCols(host, series, period) {
+  if (!host) return;
+  const ttl = $('#usageColTtl');
+  if (ttl) ttl.textContent = '各时段明细（' + (period || '') + '）';
+
+  const arr = (series || []).slice(-14);
+  if (!arr.length) { host.innerHTML = '<div class="csvg-empty">还没有可画的时段。</div>'; return; }
+
+  // 归一化基准取「所有时段、所有分项」的最大值 —— 三个系列共用一把尺子才可比
+  let mx = 1;
+  for (const d of arr) {
+    const req = +d.req || 0, loc = +d.local || 0, fail = +d.fail || 0;
+    mx = Math.max(mx, loc, fail, Math.max(0, req - loc - fail));
+  }
+
+  const bar = (cls, v, label) => {
+    const h = v ? Math.max(4, Math.round((v / mx) * 100)) : 0;
+    return '<div class="ucol-b" title="' + esc(label + '：' + v + ' 次') + '">' +
+      '<i class="' + cls + '" style="height:' + h + '%"></i></div>';
+  };
+
+  host.innerHTML = arr.map((d) => {
+    const req = +d.req || 0, loc = +d.local || 0, fail = +d.fail || 0;
+    // 「外地」= 总次数 - 本地次数。⚠️ 不能再减 fail：失败已经分别算进本地/外地里了，
+    // 再减一次会把外地重复扣掉（137 会算成 3 而不是 7）。
+    const up = Math.max(0, req - loc);
+    const tip = (d.k || '') + '：共 ' + req + ' 次';
+    return '<div class="ucol-group" title="' + esc(tip) + '">' +
+      '<div class="ucol-set">' +
+        bar('ucol-loc', loc, '本地') +
+        bar('ucol-fail', fail, '失败') +
+        bar('ucol-up', up, '外地') +
+      '</div>' +
+      '<div class="ucol-l">' + esc(d.l || d.k || '') + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+/**
+ * 折叠态：**一个标题挂两根柱子** —— 外地（成功 / 失败）、本地（成功 / 失败）。
+ * 成功 = 该项总次数 - 该项失败数（失败已按本地/外地拆开，见 Usage.cs）。
+ * 四根柱共用一把尺子（同一最大值归一），彼此可比。
+ */
+function renderUsageBars(host, t) {
+  if (!host) return;
+  t = t || {};
+  const up = +t.up || 0, loc = +t.local || 0;
+  const fUp = Math.max(0, +t.failUp || 0);
+  const fLoc = Math.max(0, +t.failLocal || 0);
+  const groups = [
+    { lab: '外地', ok: Math.max(0, up - fUp), bad: fUp, total: up },
+    { lab: '本地', ok: Math.max(0, loc - fLoc), bad: fLoc, total: loc },
+  ];
+  const mx = Math.max(1, ...groups.flatMap((g) => [g.ok, g.bad]));
+
+  host.innerHTML = groups.map((g) => {
+    const w = (v) => (v ? Math.max(6, Math.round((v / mx) * 100)) : 0);
+    const bar = (cls, v, name) => '<span class="ug-hb" title="' + esc(g.lab + name + '：' + v + ' 次') + '">' +
+      '<i class="' + cls + '" style="width:' + w(v) + '%"></i></span>';
+    return '<div class="ug-hr" title="' + esc(g.lab + '：' + g.total + ' 次（成功 ' + g.ok + ' / 失败 ' + g.bad + '）') + '">' +
+      '<span class="ug-hk">' + esc(g.lab) + '</span>' +
+      '<span class="ug-hbars">' +
+        bar('ug-hok', g.ok, '成功') +
+        bar('ug-hbad', g.bad, '失败') +
+      '</span>' +
+      '<span class="ug-hv">' + fmtNum(g.total) + '</span>' +
+    '</div>';
+  }).join('');
+}
+
+/** 折叠 / 展开用量仪表盘（状态记 localStorage，下次打开保持） */function setUsageExpanded(on) {
   const p = $('#usagePanel');
   if (!p) return;
   p.classList.toggle('expanded', !!on);
@@ -1322,8 +1461,28 @@ function bind() {
   /* 无系统标题栏：顶栏拖动（原生消息）+ 右上角窗口按钮 */
   const winCall = (cmd) => { try { call(cmd).catch(() => { }); } catch (e) { } };
   $('#btnMin')?.addEventListener('click', () => winCall('windowMinimize'));
-  $('#btnMax')?.addEventListener('click', () => winCall('windowMaximize'));
+  $('#btnMax')?.addEventListener('click', () => winCall('windowToggleMaximize'));
   $('#btnClose')?.addEventListener('click', () => winCall('windowClose'));
+
+  /* 顶栏拖动：WebView2 不支持 CSS 的 app-region:drag（实测无效），
+     所以在顶栏空白处按下鼠标时发 startDrag 给主进程，换成系统级拖动。
+     ⚠️ 要避开按钮/胶囊/输入框 —— 在那些控件上按住不能拖窗口。 */
+  (function initDragArea() {
+    const bar = document.querySelector('.topbar');
+    if (!bar) return;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;                       // 只处理左键
+      // 点在可交互元素上就不拖（按钮、下拉、输入、开关…）
+      if (e.target.closest('button, input, select, textarea, a, .switch, .seg, .win-btns, .pill')) return;
+      e.preventDefault();
+      winCall('startDrag');
+    });
+    bar.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, input, select, textarea, a, .switch, .seg, .win-btns, .pill')) return;
+      winCall('windowToggleMaximize');
+    });
+    bar.style.cursor = 'default';
+  })();
 
   $('#btnStart').addEventListener('click', async () => { const r = await call('startServer'); if (r && r.error) toast(r.error, 'error'); });
   $('#btnStop').addEventListener('click', () => call('stopServer'));
@@ -1545,6 +1704,7 @@ function bind() {
   $$('.modelTabs .seg-btn').forEach((b) => b.addEventListener('click', () => setModelTab(b.dataset.mtab)));
   setModelTab(S.mtab);   // 开局把按钮态和工具条对齐（本地条 / 外地条两套）
   $$('#usageTabs .seg-btn').forEach((b) => b.addEventListener('click', () => setUsageTab(b.dataset.utab)));
+
 
   /* 用量仪表盘：折叠态默认，点标题/数字区/按钮都能切换 */
   $('#btnUsageToggle').addEventListener('click', (e) => { e.stopPropagation(); toggleUsage(); });

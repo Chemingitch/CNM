@@ -585,3 +585,128 @@ html[data-theme="light"] #usagePanel { box-shadow: 0 -10px 24px rgba(20,30,60,.1
 .ubar-l { font-size: 10.5px; color: var(--muted); height: 14px; line-height: 14px; white-space: nowrap; }
 .ubar:hover .ubar-fill { border-color: var(--line2); }
 .ubar:hover .ubar-l, .ubar:hover .ubar-v { color: var(--text); }
+
+/* ═══════════════════════════════════════════════════════════════
+   用量面板 · 折叠=横向条形 / 展开=环形+柱形
+   （这一段追加在文件末尾：后面的规则优先，用来覆盖上面那套旧的 .ubar 纵向柱）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 折叠态：本地/外地各一条横向条，失败并进条内（红段） */
+.ug-spark { flex: 1; min-width: 0; height: auto; display: flex; flex-direction: column;
+  align-items: stretch; gap: 5px; }
+.ug-hr { display: flex; align-items: center; gap: 8px; }
+.ug-hk { flex: 0 0 32px; font-size: 10.5px; color: var(--muted); text-align: right; }
+.ug-htrack { flex: 1 1 auto; min-width: 0; height: 10px; border-radius: 999px;
+  background: var(--line); overflow: hidden; }
+.ug-hf { display: flex; height: 100%; border-radius: 999px; overflow: hidden;
+  transition: width .25s ease; }
+.ug-hf > b { display: block; height: 100%; }
+.ug-hok { background: inherit; }
+.ug-hbad { background: linear-gradient(90deg, #ff7b7b, #e5484d); }
+.ug-hf.loc { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.ug-hf.up { background: linear-gradient(90deg, #c07bff, #7c5cff); }
+.ug-hv { flex: 0 0 auto; min-width: 54px; font-size: 10.5px; color: var(--text);
+  text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ug-hv em { font-style: normal; color: var(--err); }
+
+/* 展开态：左环形 + 右柱形 */
+.usage-board { display: flex; align-items: flex-start; gap: 26px; flex-wrap: wrap; margin: 4px 0 2px; }
+.usage-side { flex: 1 1 300px; min-width: 240px; }
+.usage-side-ttl { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+
+/* 展开态环形：圆头弧 + 渐变 + 中心数字，右侧明细表 */
+.usage-chart { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.cdonut { width: 216px; height: 216px; flex: 0 0 auto; overflow: visible; }
+.dn-num { fill: var(--text); font-size: 25px; font-weight: 600; text-anchor: middle; letter-spacing: .5px; }
+.dn-lab { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+.csvg-empty { color: var(--muted); font-size: 12px; }
+.dn-legend { display: flex; flex-direction: column; gap: 7px; min-width: 176px; }
+.dn-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.dn-row .dn-k { flex: 0 0 auto; min-width: 34px; }
+.dn-row b { color: var(--text); font-weight: 600; margin-left: auto;
+  font-variant-numeric: tabular-nums; }
+.dn-row .dn-p { flex: 0 0 40px; text-align: right; font-size: 11px; opacity: .8;
+  font-variant-numeric: tabular-nums; }
+.dn-row.bad b { color: var(--err); }
+.dn-sep { height: 1px; background: var(--line); margin: 3px 0; }
+
+/* 展开态柱形：每时段一根，三段自下而上 = 外地 / 失败 / 本地 */
+.usage-cols { display: flex; align-items: flex-end; gap: 7px; height: 132px; }
+.ucol { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; }
+.ucol-v { font-size: 10.5px; color: var(--muted); height: 13px; line-height: 13px; }
+.ucol-track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.ucol-fill { width: 74%; max-width: 38px; border-radius: 12px 12px 5px 5px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: flex-end; background: var(--line); }
+.ucol-fill > i { display: block; width: 100%; }
+.ucol-loc { background: linear-gradient(180deg, var(--accent), var(--accent2)); }
+.ucol-fail { background: linear-gradient(180deg, #ff7b7b, #e5484d); }
+.ucol-up { background: linear-gradient(180deg, #c07bff, #7c5cff); }
+.ucol-l { font-size: 10.5px; color: var(--muted); height: 13px; line-height: 13px; white-space: nowrap; }
+.ucol:hover .ucol-l, .ucol:hover .ucol-v { color: var(--text); }
+
+/* 图例小方块 */
+.lg-dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
+.lg-dot.loc { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+.lg-dot.up { background: linear-gradient(135deg, #c07bff, #7c5cff); }
+.lg-dot.ok { background: linear-gradient(135deg, #35c98a, #2fb87d); }
+.lg-dot.err { background: linear-gradient(135deg, #ff7b7b, #e5484d); }
+/* ── 每种数值各自一条，不做堆叠 ── */
+
+/* 折叠态：4 条独立横向条（外地 / 外地失败 / 本地 / 本地失败） */
+.ug-hr { display: flex; align-items: center; gap: 8px; height: 14px; }
+.ug-hr.is-fail .ug-hk { color: var(--err); opacity: .9; }
+.ug-hf.failUp { background: linear-gradient(90deg, #ff7b7b, #e5484d); }
+.ug-hf.failLocal { background: linear-gradient(90deg, #ff9a9a, #e5484d); }
+.ug-hr.is-fail .ug-hv { color: var(--err); }
+
+/* 展开态：每时段一组，组内三根独立柱（本地 / 失败 / 外地）并排 */
+.ucol-group { flex: 1 1 0; min-width: 0; height: 100%; display: flex;
+  flex-direction: column; align-items: center; gap: 4px; }
+.ucol-set { flex: 1; width: 100%; display: flex; align-items: flex-end;
+  justify-content: center; gap: 2px; }
+.ucol-b { flex: 1 1 0; min-width: 3px; height: 100%; display: flex;
+  align-items: flex-end; justify-content: center; }
+.ucol-b > i { display: block; width: 100%; border-radius: 8px 8px 3px 3px;
+  transition: height .25s ease; }
+/* ── 折叠态：一个标题 + 两根柱（成功 / 失败），不合并成一整条 ── */
+.ug-hbars { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ug-hb { display: block; height: 8px; border-radius: 999px; background: var(--line);
+  overflow: hidden; }
+.ug-hb > i { display: block; height: 100%; border-radius: 999px;
+  transition: width .25s ease; }
+.ug-hok { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.ug-hbad { background: linear-gradient(90deg, #ff7b7b, #e5484d); }
+/* 旧的两层条规则（.ug-htrack/.ug-hf）已不再使用，留着不影响；上面这套优先生效 */
+.ug-hr.is-fail .ug-hk, .ug-hr.is-fail .ug-hv { color: var(--err); }
+/* ── 折叠态条形的间距修正 ──
+   两组（外地/本地）各行高度太小、组间又没间隔，两根柱会贴成"一组三根"。
+   这里：组间距拉开、组内两根留缝、标题与柱垂直居中。 */
+.ug-spark { gap: 10px; }              /* 组与组之间的间距 */
+.ug-hr { gap: 10px; min-height: 26px; }
+.ug-hbars { gap: 4px; }               /* 组内「成功 / 失败」之间的缝 */
+.ug-hb { height: 9px; }
+.ug-hk { flex: 0 0 34px; line-height: 1.1; }
+.ug-hv { min-width: 48px; line-height: 1.1; }
+/* 两组之间加一条淡分隔线：光靠间距在深色背景上分不清"这两根是一组还是两组" */
+.ug-hr + .ug-hr { padding-top: 9px; border-top: 1px solid var(--line); }
+/* ── 折叠态条形：用户反馈"下面变拥挤了"，这里把呼吸感拉开 ──
+   之前 26px 行高 + 3px 组内缝 + 9px 组间，两组几乎贴在一起。
+   现在：行更高、组内两根之间留足、组间用更大间距 + 分隔线明确隔开。 */
+.ug-spark { gap: 14px; }                 /* 组与组之间 */
+.ug-hr { gap: 11px; min-height: 34px; }  /* 每组的高度（两根柱 + 缝）*/
+.ug-hbars { gap: 6px; }                  /* 组内「成功 / 失败」之间的缝 */
+.ug-hb { height: 10px; }
+.ug-hk { flex: 0 0 36px; font-size: 11px; }
+.ug-hv { min-width: 50px; font-size: 11px; }
+.ug-hr + .ug-hr { padding-top: 14px; border-top: 1px solid var(--line); }
+/* ── 关键修复：折叠态容器的 max-height 卡死了内容 ──
+   .usage-glance 原来写死 max-height:90px + overflow:hidden。
+   两组条（34px + 14px间距 + 34px）已经 82px，再加面板内边距就超了 →
+   第二组被裁掉一半，看起来像"没生效、还是挤"。
+   改成用 max-height:none（展开动画仍靠 .usage-full 那套），让内容自己撑开。 */
+.usage-glance { max-height: none; overflow: visible; }
+.usage:not(.expanded) .usage-glance { max-height: none; opacity: 1; }
+/* 折叠动画改由外层容器的高度过渡承担（不再依赖固定 max-height） */
+.usage { transition: none; }
+.usage-glance { transition: opacity .18s ease; }
